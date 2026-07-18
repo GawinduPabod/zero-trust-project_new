@@ -13,7 +13,7 @@ export default function RegisterPage() {
     setMessage("Please wait...");
 
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app//register", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

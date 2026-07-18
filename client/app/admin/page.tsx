@@ -20,7 +20,7 @@ export default function AdminDashboard() {
   //// Fetch Users
   const fetchUsers = async () => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app//admin/users");
+      const res = await fetch("https://zero-trust-project-new.vercel.app/admin/users");
       const data = await res.json();
       setUsers(data);
     } catch (error) {
@@ -35,7 +35,7 @@ export default function AdminDashboard() {
   //// Handle Admin Actions (Approve, Lock, Unlock)
   const handleAction = async (email: string, action: string) => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app//admin/user/action", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/admin/user/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, action }),
@@ -52,7 +52,7 @@ export default function AdminDashboard() {
   const handleAddUser = async (e: any) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app//register", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: newUsername, email: newEmail }),
@@ -74,10 +74,10 @@ export default function AdminDashboard() {
   const downloadCSV = async () => {
     try {
       // Fetch File Logs & Message Logs from Backend
-      const fileRes = await fetch("https://zero-trust-project-new.vercel.app//admin/logs/files");
+      const fileRes = await fetch("https://zero-trust-project-new.vercel.app/admin/logs/files");
       const files = await fileRes.json();
 
-      const msgRes = await fetch("https://zero-trust-project-new.vercel.app//admin/logs/messages");
+      const msgRes = await fetch("https://zero-trust-project-new.vercel.app/admin/logs/messages");
       const messages = await msgRes.json();
 
       // Build CSV Content Document

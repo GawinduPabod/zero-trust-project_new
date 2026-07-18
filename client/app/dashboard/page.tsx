@@ -42,7 +42,7 @@ export default function UserDashboard() {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app//users/approved");
+        const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
         const data = await res.json();
         setUsers(data.filter((u: any) => u.email !== currentUser?.email));
       } catch (err) {
@@ -59,7 +59,7 @@ export default function UserDashboard() {
     if (!currentUser || !selectedContact) return;
     try {
       // Fetch Messages
-      const msgRes = await fetch("https://zero-trust-project-new.vercel.app//messages/get", {
+      const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
@@ -78,7 +78,7 @@ export default function UserDashboard() {
       setMessages(decryptedMessages);
 
       // Fetch Files
-      const fileRes = await fetch("https://zero-trust-project-new.vercel.app//files/list", {
+      const fileRes = await fetch("https://zero-trust-project-new.vercel.app/files/list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
@@ -111,7 +111,7 @@ export default function UserDashboard() {
     reader.onload = async (event) => {
       const base64Pic = event.target?.result as string;
       try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app//user/profile-pic", {
+        const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),
@@ -145,7 +145,7 @@ export default function UserDashboard() {
     const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
 
     try {
-      await fetch("https://zero-trust-project-new.vercel.app//messages/send", {
+      await fetch("https://zero-trust-project-new.vercel.app/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -173,7 +173,7 @@ export default function UserDashboard() {
       const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
 
       try {
-        await fetch("https://zero-trust-project-new.vercel.app//files/upload", {
+        await fetch("https://zero-trust-project-new.vercel.app/files/upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -195,7 +195,7 @@ export default function UserDashboard() {
   //// 7. Request & Verify OTP for Files
   const handleRequestOTP = async (fileId: number) => {
     try {
-      await fetch("https://zero-trust-project-new.vercel.app//files/request-otp", {
+      await fetch("https://zero-trust-project-new.vercel.app/files/request-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),
@@ -210,7 +210,7 @@ export default function UserDashboard() {
   const handleDownloadFile = async (e: any, fileId: number) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app//files/download", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/files/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file_id: fileId, otp: otpInput }),
