@@ -17,7 +17,7 @@ export default function LoginPage() {
     setMessage("Sending OTP... Please wait.");
 
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email }),
@@ -42,7 +42,7 @@ export default function LoginPage() {
     setMessage("Verifying OTP...");
 
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/verify-otp", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/api/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, otp }),
@@ -93,7 +93,7 @@ export default function LoginPage() {
               Send OTP
             </button>
 
-            {/* Register Link Added Here */}
+            {/* Register Link */}
             <div className="mt-4 text-center">
               <p className="text-sm text-gray-400">
                 Don't have an account?{" "}
@@ -140,6 +140,4 @@ export default function LoginPage() {
       </div>
     </div>
   );
-
-  
 }
