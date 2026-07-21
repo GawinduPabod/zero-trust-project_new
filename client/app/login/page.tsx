@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
-  const [step, setStep] = useState(1); 
+  const [step, setStep] = useState(1);
   const [message, setMessage] = useState("");
   const router = useRouter();
 
@@ -25,8 +26,8 @@ export default function LoginPage() {
       const data = await res.json();
       if (res.ok) {
         setMessage(data.message);
-        setOtp(""); 
-        setStep(2); 
+        setOtp("");
+        setStep(2);
       } else {
         setMessage(data.error);
       }
@@ -49,15 +50,10 @@ export default function LoginPage() {
 
       const data = await res.json();
       if (res.ok) {
-        setMessage(data.message);
-        
-        // අත්‍යවශ්‍ය පියවර: පරිශීලක දත්ත Browser හි සුරැකීම
-        localStorage.setItem("zeroTrustUser", JSON.stringify(data.user)); 
-        
-        // Forcefully redirecting to the dashboard
-        setTimeout(() => {
-          window.location.href = "/dashboard"; 
-        }, 1000);
+        setMessage("Login successful! Redirecting...");
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("userEmail", email);
+        router.push("/dashboard");
       } else {
         setMessage(data.error);
       }
@@ -66,11 +62,12 @@ export default function LoginPage() {
     }
   };
 
-  //// UI Section
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
       <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-96">
-        <h2 className="text-2xl font-bold mb-6 text-center text-blue-400">Zero Trust Workspace</h2>
+        <h2 className="text-2xl font-bold mb-6 text-center text-blue-400">
+          Zero Trust Workspace
+        </h2>
         <h3 className="text-lg mb-4 text-center">Login</h3>
 
         {step === 1 ? (
@@ -95,13 +92,25 @@ export default function LoginPage() {
             >
               Send OTP
             </button>
+
+            {/* Register Link Added Here */}
+            <div className="mt-4 text-center">
+              <p className="text-sm text-gray-400">
+                Don't have an account?{" "}
+                <Link
+                  href="/register"
+                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                >
+                  Register Here
+                </Link>
+              </p>
+            </div>
           </form>
         ) : (
           <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
             <p className="text-sm text-gray-400 text-center mb-2">
               Please check your email ({email}) for the OTP.
             </p>
-            
             {/* Auto-fill prevention handled here */}
             <input
               type="text"
@@ -112,33 +121,25 @@ export default function LoginPage() {
               required
               maxLength={6}
               value={otp}
-              className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-400 text-center tracking-widest text-xl font-bold"
-              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+              className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-400 text-center tracking-widest text-xl"
+              onChange={(e) => setOtp(e.target.value)}
             />
-
             <button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700 font-bold py-2 px-4 rounded mt-2 transition-colors" 
+              className="bg-green-600 hover:bg-green-700 font-bold py-2 px-4 rounded mt-4 transition-colors"
             >
-              Verify & Login
-            </button>
-            
-            <button
-              type="button"
-              onClick={handleLogin}
-              className="text-sm text-blue-400 hover:text-blue-300 mt-2 text-center underline"
-            >
-              Didn't receive code? Resend OTP
+              Verify OTP
             </button>
           </form>
         )}
 
+        {/* Display Messages */}
         {message && (
-          <p className={`mt-4 text-center text-sm ${message.includes("successful") ? "text-green-400" : "text-yellow-300"}`}>
-            {message}
-          </p>
+          <p className="mt-4 text-center text-sm text-yellow-300">{message}</p>
         )}
       </div>
     </div>
   );
+
+  
 }
