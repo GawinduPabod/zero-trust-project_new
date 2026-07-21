@@ -51,8 +51,7 @@ export default function LoginPage() {
       const data = await res.json();
       if (res.ok) {
         setMessage("Login successful! Redirecting...");
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("userEmail", email);
+        localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: email, token: data.token }));
         router.push("/dashboard");
       } else {
         setMessage(data.error);
