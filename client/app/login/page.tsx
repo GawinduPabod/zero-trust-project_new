@@ -17,7 +17,7 @@ export default function LoginPage() {
     setMessage("Sending OTP... Please wait.");
 
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/api/login", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email }),
@@ -42,7 +42,7 @@ export default function LoginPage() {
     setMessage("Verifying OTP...");
 
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/api/verify-otp", {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, otp }),
@@ -93,7 +93,7 @@ export default function LoginPage() {
               Send OTP
             </button>
 
-            {/* Register Link */}
+            {/* Register Link Added Here */}
             <div className="mt-4 text-center">
               <p className="text-sm text-gray-400">
                 Don't have an account?{" "}
@@ -111,7 +111,6 @@ export default function LoginPage() {
             <p className="text-sm text-gray-400 text-center mb-2">
               Please check your email ({email}) for the OTP.
             </p>
-            {/* Auto-fill prevention handled here */}
             <input
               type="text"
               name="secure-otp-code"
