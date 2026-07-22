@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit'); // 1. අලුතින් එකතු කළ Firewall එක
+const { generateSecurityReport } = require('./aiSecurityBot'); // 2. අලුතින් එකතු කළ AI Bot එක
 require('dotenv').config();
 
 const app = express();
@@ -20,13 +22,43 @@ pool.connect()
   .then(() => console.log("Neon Database connected successfully!"))
   .catch(err => console.error("Database Connection Error:", err));
 
-
 // Nodemailer Setup
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
+    }
+});
+
+
+// ==========================================
+// 🛡️ Zero Trust AI Firewall (Attack Detection)
+// ==========================================
+const loginBruteForceLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // විනාඩි 1ක් ඇතුළත
+    max: 3, // උපරිම ලොගින් උත්සාහයන් 3යි (Burp Suite එකෙන් ගහද්දි මේක පනිනවා)
+    handler: async (req, res) => {
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const targetEmail = req.body.email || "Unknown";
+        
+        console.log(`🚨 SECURITY BREACH DETECTED FROM IP: ${clientIp}`);
+        
+        // AI එකට කියලා රිපෝට් එක හදාගන්නවා
+        const aiReport = await generateSecurityReport("Brute-Force / Credential Stuffing", clientIp, targetEmail);
+        
+        try {
+            // Admin ට පේන්න AI Admin ගේ ඉඳන් Dashboard එකට රහස් Message එකක් දානවා (Encrypt නොකර දාන්නේ AI එකෙන් නිසා)
+            await pool.query(
+                "INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)",
+                ['ai_admin', targetEmail !== "Unknown" ? targetEmail : null, aiReport]
+            );
+        } catch (dbErr) {
+            console.error("AI Alert save error:", dbErr);
+        }
+
+        // Attacker ව සම්පූර්ණයෙන්ම Block කරනවා
+        res.status(429).json({ error: "🚨 Zero Trust Firewall: Security breach detected! Your IP has been flagged and blocked." });
     }
 });
 
@@ -58,11 +90,18 @@ app.post('/register', async (req, res) => {
 
 
 // ==========================================
-// Login & Generate OTP Section 
+// Login & Generate OTP Section (With Firewall)
 // ==========================================
-app.post('/login', async (req, res) => {
+// මෙතන අර හැදුව Firewall එක (loginBruteForceLimiter) ලින්ක් කරලා තියෙනවා
+app.post('/login', loginBruteForceLimiter, async (req, res) => {
     try {
-        const { username, email } = req.body;
+        const { username, email, location } = req.body;
+
+        // Zero Trust Strict Check: Block if location is denied
+        if (location === "Location Denied" || location === "Geolocation not supported") {
+            return res.status(403).json({ error: "Zero Trust Protocol: Location Access is mandatory for login." });
+        }
+
         const userResult = await pool.query("SELECT * FROM users WHERE email = $1 AND username = $2", [email, username]);
         
         if (userResult.rows.length === 0) {
@@ -80,9 +119,10 @@ app.post('/login', async (req, res) => {
 
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
         
+        // Save the pending location temporally in DB (will be finalized upon OTP verify)
         await pool.query(
-            "UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE email = $2",
-            [otpCode, email]
+            "UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes', last_login_location = $2 WHERE email = $3",
+            [otpCode, location, email]
         );
 
         const mailOptions = {
@@ -96,6 +136,8 @@ app.post('/login', async (req, res) => {
                     <p>Your One-Time Password (OTP) for login is:</p>
                     <h1 style="color: #0056b3; letter-spacing: 2px;">${otpCode}</h1>
                     <p style="color: red; font-size: 12px;">This code will expire in 5 minutes.</p>
+                    <hr/>
+                    <p style="font-size: 10px; color: gray;">Login attempt from: ${location}</p>
                 </div>
             `
         };
@@ -154,7 +196,7 @@ app.post('/verify-otp', async (req, res) => {
 
         res.status(200).json({ 
             message: "Login successful! Redirecting to Dashboard", 
-            user: { id: user.id, username: user.username, email: user.email } 
+            user: { id: user.id, username: user.username, email: user.email, location: user.last_login_location } 
         });
 
     } catch (err) {
@@ -167,7 +209,6 @@ app.post('/verify-otp', async (req, res) => {
 // ==========================================
 // Admin Dashboard Endpoints
 // ==========================================
-
 app.get('/admin/users', async (req, res) => {
     try {
         const result = await pool.query(
@@ -227,7 +268,6 @@ app.get('/admin/logs/messages', async (req, res) => {
 // ==========================================
 // User Dashboard & Profile Section
 // ==========================================
-
 app.get('/users/approved', async (req, res) => {
     try {
         const result = await pool.query("SELECT username, email, profile_picture FROM users WHERE status = 'approved'");
@@ -253,7 +293,6 @@ app.post('/user/profile-pic', async (req, res) => {
 // ==========================================
 // Messaging Section 
 // ==========================================
-
 app.post('/messages/send', async (req, res) => {
     try {
         const { sender_email, receiver_email, content } = req.body;
@@ -292,7 +331,6 @@ app.post('/messages/get', async (req, res) => {
 // ==========================================
 // Secure File Transfer Section
 // ==========================================
-
 app.post('/files/upload', async (req, res) => {
     try {
         const { sender_email, receiver_email, file_name, file_data } = req.body;
