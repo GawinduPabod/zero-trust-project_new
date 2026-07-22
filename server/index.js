@@ -441,3 +441,5 @@ app.post('/admin/copilot/chat', async (req, res) => {
         res.status(500).json({ error: "Server Error." });
     }
 });
+
+// Force Vercel deployment update
