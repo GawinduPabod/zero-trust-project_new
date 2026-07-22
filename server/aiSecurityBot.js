@@ -39,3 +39,28 @@ async function generateSecurityReport(attackType, ipAddress, targetEmail = "Unkn
 
 // Export the function to be used in other files
 module.exports = { generateSecurityReport };
+
+/**
+ * Handle conversational queries from the Admin
+ * @param {string} userMessage - The message from the admin
+ */
+async function chatWithCopilot(userMessage) {
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `
+            You are the "Security Copilot", an advanced AI assistant embedded within the Zero Trust Workspace Admin Panel.
+            Your job is to assist the Human Administrator with cybersecurity tasks, log analysis, and system status queries.
+            Keep your answers highly professional, concise, and technical. Use a "cyber" tone.
+            
+            Administrator's Message: "${userMessage}"
+        `;
+        const result = await model.generateContent(prompt);
+        return result.response.text();
+    } catch (error) {
+        console.error("Copilot Chat Error:", error);
+        return "ERROR: Connection to Neural Network failed. Copilot offline.";
+    }
+}
+
+// Update the module.exports to include the new function
+module.exports = { generateSecurityReport, chatWithCopilot };

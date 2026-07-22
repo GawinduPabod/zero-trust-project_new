@@ -2,12 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
-const rateLimit = require('express-rate-limit'); // 1. අලුතින් එකතු කළ Firewall එක
-const { generateSecurityReport } = require('./aiSecurityBot'); // 2. අලුතින් එකතු කළ AI Bot එක
+const rateLimit = require('express-rate-limit'); // 1. new adding  Firewall 
 require('dotenv').config();
-
+const { generateSecurityReport, chatWithCopilot } = require('./aiSecurityBot');
 const app = express();
-
 // Middleware setup
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -429,3 +427,17 @@ app.post('/files/list', async (req, res) => {
 
 // Start Server
 module.exports = app;
+
+// ==========================================
+// AI Security Copilot Endpoint
+// ==========================================
+app.post('/admin/copilot/chat', async (req, res) => {
+    try {
+        const { message } = req.body;
+        const aiResponse = await chatWithCopilot(message);
+        res.status(200).json({ response: aiResponse });
+    } catch (err) {
+        console.error("Copilot Endpoint Error:", err.message);
+        res.status(500).json({ error: "Server Error." });
+    }
+});
