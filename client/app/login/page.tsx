@@ -11,28 +11,50 @@ export default function LoginPage() {
   const [message, setMessage] = useState("");
   const router = useRouter();
 
-  //// Handle Step 1: Send Login Request & Generate OTP
+  //// Handle Step 1: Send Login Request & Generate OTP (With Location)
   const handleLogin = async (e: any) => {
     e.preventDefault();
-    setMessage("Sending OTP... Please wait.");
+    setMessage("Requesting location access... Please wait.");
 
-    try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, email }),
-      });
+    // Function to send data to backend
+    const sendLoginData = async (userLocation: string) => {
+      setMessage("Sending OTP... Please wait.");
+      try {
+        const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, email, location: userLocation }), // ලොකේෂන් එක මෙතනින් යවනවා
+        });
 
-      const data = await res.json();
-      if (res.ok) {
-        setMessage(data.message);
-        setOtp("");
-        setStep(2);
-      } else {
-        setMessage(data.error);
+        const data = await res.json();
+        if (res.ok) {
+          setMessage(data.message);
+          setOtp("");
+          setStep(2);
+        } else {
+          setMessage(data.error);
+        }
+      } catch (error) {
+        setMessage("Cannot connect to the server.");
       }
-    } catch (error) {
-      setMessage("Cannot connect to the server.");
+    };
+
+    // Asking for Browser Geolocation
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          // Access Granted
+          const locationString = `Lat: ${position.coords.latitude}, Lng: ${position.coords.longitude}`;
+          await sendLoginData(locationString);
+        },
+        async (error) => {
+          // Access Denied by User
+          setMessage("Location access denied. Notifying Security Admin...");
+          await sendLoginData("Location Denied");
+        }
+      );
+    } else {
+      await sendLoginData("Geolocation not supported");
     }
   };
 
