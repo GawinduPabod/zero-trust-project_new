@@ -2,10 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
-const rateLimit = require('express-rate-limit'); // 1. new adding  Firewall 
+const rateLimit = require('express-rate-limit'); // New adding Firewall 
 require('dotenv').config();
 const { generateSecurityReport, chatWithCopilot } = require('./aiSecurityBot');
 const app = express();
+
 // Middleware setup
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -31,22 +32,22 @@ const transporter = nodemailer.createTransport({
 
 
 // ==========================================
-// 🛡️ Zero Trust AI Firewall (Attack Detection)
+// Zero Trust AI Firewall (Attack Detection)
 // ==========================================
 const loginBruteForceLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // විනාඩි 1ක් ඇතුළත
-    max: 3, // උපරිම ලොගින් උත්සාහයන් 3යි (Burp Suite එකෙන් ගහද්දි මේක පනිනවා)
+    windowMs: 1 * 60 * 1000, // Within 1 minute
+    max: 3, // Maximum 3 login attempts
     handler: async (req, res) => {
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
         const targetEmail = req.body.email || "Unknown";
         
-        console.log(`🚨 SECURITY BREACH DETECTED FROM IP: ${clientIp}`);
+        console.log(`[SECURITY BREACH] DETECTED FROM IP: ${clientIp}`);
         
-        // AI එකට කියලා රිපෝට් එක හදාගන්නවා
+        // Generate AI security report
         const aiReport = await generateSecurityReport("Brute-Force / Credential Stuffing", clientIp, targetEmail);
         
         try {
-            // Admin ට පේන්න AI Admin ගේ ඉඳන් Dashboard එකට රහස් Message එකක් දානවා (Encrypt නොකර දාන්නේ AI එකෙන් නිසා)
+            // Send a hidden message to the Admin Dashboard from AI Admin
             await pool.query(
                 "INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)",
                 ['ai_admin', targetEmail !== "Unknown" ? targetEmail : null, aiReport]
@@ -55,8 +56,41 @@ const loginBruteForceLimiter = rateLimit({
             console.error("AI Alert save error:", dbErr);
         }
 
-        // Attacker ව සම්පූර්ණයෙන්ම Block කරනවා
-        res.status(429).json({ error: "🚨 Zero Trust Firewall: Security breach detected! Your IP has been flagged and blocked." });
+        // Block the attacker completely
+        res.status(429).json({ error: "Zero Trust Firewall: Security breach detected! Your IP has been flagged and blocked." });
+    }
+});
+
+
+// ==========================================
+// SMART HONEYPOT ROUTE (ZERO TRUST)
+// ==========================================
+app.get('/api/system/env-backup', async (req, res) => {
+    try {
+        // 1. Extract attacker information
+        const attackerIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        
+        console.log(`[HONEYPOT ALERT] Attack detected from IP: ${attackerIP}`);
+
+        // 2. Generate AI report for the Honeypot breach
+        const aiReport = await generateSecurityReport("Unauthorized Directory Traversal / Honeypot Access", attackerIP, "Unknown");
+        
+        // Send alert to Admin dashboard via messages table (Global admin message)
+        await pool.query(
+            "INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)",
+            ['ai_admin', null, aiReport]
+        );
+
+        // 3. Send a deceptive fake response to mislead the attacker
+        res.status(403).json({
+            status: "failed",
+            error: "Access Denied",
+            message: "Valid administrative token required to view system environment keys.",
+            security_code: "ERR_AUTH_MISSING_0x892"
+        });
+    } catch (err) {
+        console.error("Honeypot Error:", err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
@@ -90,7 +124,7 @@ app.post('/register', async (req, res) => {
 // ==========================================
 // Login & Generate OTP Section (With Firewall)
 // ==========================================
-// මෙතන අර හැදුව Firewall එක (loginBruteForceLimiter) ලින්ක් කරලා තියෙනවා
+// Linked the Firewall (loginBruteForceLimiter) here
 app.post('/login', loginBruteForceLimiter, async (req, res) => {
     try {
         const { username, email, location } = req.body;
@@ -441,5 +475,3 @@ app.post('/admin/copilot/chat', async (req, res) => {
         res.status(500).json({ error: "Server Error." });
     }
 });
-
-// Force Vercel deployment update
