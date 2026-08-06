@@ -1,7 +1,6 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 
-// 1. Define TypeScript Interfaces (මේක තමයි කලින් අඩුවෙලා තිබුණේ)
 interface User {
   id: number;
   username: string;
@@ -18,12 +17,14 @@ interface ChatMessage {
 }
 
 export default function AdminDashboard() {
-  // 2. Add Types to useStates
   const [users, setUsers] = useState<User[]>([]);
   const [command, setCommand] = useState<string>('');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
     { sender: 'AI', text: 'SECURITY COPILOT INITIALIZED. AWAITING COMMANDS...' }
   ]);
+  
+  // NEW: State to track if lockdown is active or not
+  const [isLockdown, setIsLockdown] = useState<boolean>(false);
 
   const API_URL = "https://zero-trust-project-new.vercel.app";
 
@@ -51,7 +52,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({ email, action: 'kick' })
       });
       if (res.ok) {
-        alert(`User ${email} kicked successfully! Their session has been terminated.`);
+        alert(`User ${email} kicked successfully!`);
         fetchUsers();
       }
     } catch (error) {
@@ -73,18 +74,24 @@ export default function AdminDashboard() {
     }
   };
 
+  // UPDATED: Toggle Lockdown Function
   const handleLockdown = async () => {
-    const confirmLockdown = window.confirm("WARNING: Are you sure you want to INITIATE SYSTEM LOCKDOWN? All user connections will be severed.");
+    const actionText = isLockdown ? "LIFT the SYSTEM LOCKDOWN?" : "INITIATE SYSTEM LOCKDOWN? All user connections will be severed.";
+    const confirmLockdown = window.confirm(`WARNING: Are you sure you want to ${actionText}`);
+    
     if (!confirmLockdown) return;
 
     try {
+      const newState = !isLockdown; // Flip the state (true -> false, false -> true)
       const res = await fetch(`${API_URL}/admin/system/lockdown`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: true }) 
+        body: JSON.stringify({ state: newState }) 
       });
       const data = await res.json();
       alert(data.message);
+      
+      setIsLockdown(newState); // Update the button UI
       fetchUsers();
     } catch (error) {
       console.error("Lockdown execution failed:", error);
@@ -114,7 +121,6 @@ export default function AdminDashboard() {
   return (
     <div style={{ backgroundColor: '#000', color: '#0ff', minHeight: '100vh', padding: '20px', fontFamily: 'monospace' }}>
       
-      {/* Header Section */}
       <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #0ff', paddingBottom: '10px', marginBottom: '20px' }}>
         <div>
           <h1 style={{ fontSize: '24px', margin: 0, textShadow: '0 0 5px #0ff' }}>SYSTEM_ADMIN_PANEL</h1>
@@ -124,19 +130,26 @@ export default function AdminDashboard() {
           <p style={{ margin: 0, fontSize: '18px', color: '#0f0' }}>{new Date().toLocaleString()}</p>
           <p style={{ margin: 0, color: '#088' }}>SECURE CONNECTION ESTABLISHED</p>
           
+          {/* UPDATED: Dynamic Button UI */}
           <button 
             onClick={handleLockdown}
-            style={{ marginTop: '10px', padding: '8px 15px', backgroundColor: '#800000', color: '#fff', border: '1px solid red', cursor: 'pointer', fontWeight: 'bold' }}>
-            ⚠️ INITIATE LOCKDOWN ⚠️
+            style={{ 
+              marginTop: '10px', 
+              padding: '8px 15px', 
+              backgroundColor: isLockdown ? '#006400' : '#800000', 
+              color: '#fff', 
+              border: `1px solid ${isLockdown ? '#0f0' : 'red'}`, 
+              cursor: 'pointer', 
+              fontWeight: 'bold' 
+            }}>
+            {isLockdown ? '✅ LIFT LOCKDOWN ✅' : '⚠️ INITIATE LOCKDOWN ⚠️'}
           </button>
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: '20px' }}>
         
-        {/* Left Column: Controls & User Table */}
         <div style={{ flex: 2 }}>
-          
           <div style={{ border: '1px solid #088', padding: '15px', marginBottom: '20px' }}>
             <span style={{ marginRight: '15px' }}>ADD_NODE:</span>
             <input type="text" placeholder="Username" style={{ background: 'transparent', border: '1px solid #088', color: '#0ff', padding: '5px', marginRight: '10px' }} />
@@ -193,7 +206,6 @@ export default function AdminDashboard() {
           </table>
         </div>
 
-        {/* Right Column: AI Security Copilot */}
         <div style={{ flex: 1, border: '1px solid #088', display: 'flex', flexDirection: 'column', height: '70vh' }}>
           <div style={{ padding: '10px', backgroundColor: '#022', borderBottom: '1px solid #088', display: 'flex', justifyContent: 'space-between' }}>
             <strong>SECURITY_COPILOT</strong>
