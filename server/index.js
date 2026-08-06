@@ -174,18 +174,23 @@ app.post('/verify-otp', async (req, res) => {
 
 
 // ==========================================
-// RESTORED: DASHBOARD USERS ROUTE
+// RESTORED & FIXED: DASHBOARD USERS ROUTE
 // ==========================================
-app.get('/users', async (req, res) => {
+const getApprovedUsers = async (req, res) => {
     try {
         const result = await pool.query(
             "SELECT id, username, email, session_active FROM users WHERE status = 'approved' ORDER BY username ASC"
         );
         res.status(200).json(result.rows);
     } catch (err) {
+        console.error("Error fetching approved users:", err.message);
         res.status(500).json({ error: "Server Error." });
     }
-});
+};
+
+app.get('/users', getApprovedUsers);
+app.get('/users/approved', getApprovedUsers);
+app.get('/approved', getApprovedUsers);
 
 // ==========================================
 // RESTORED: MESSAGING ROUTES
