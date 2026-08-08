@@ -1,6 +1,7 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 
+// TypeScript Interfaces
 interface User {
   id: number;
   username: string;
@@ -9,6 +10,7 @@ interface User {
   last_login_time: string | null;
   session_active: boolean;
   is_locked: boolean;
+  status: string; // NEW: Added status field
 }
 
 interface ChatMessage {
@@ -23,7 +25,6 @@ export default function AdminDashboard() {
     { sender: 'AI', text: 'SECURITY COPILOT INITIALIZED. AWAITING COMMANDS...' }
   ]);
   
-  // NEW: State to track if lockdown is active or not
   const [isLockdown, setIsLockdown] = useState<boolean>(false);
 
   const API_URL = "https://zero-trust-project-new.vercel.app";
@@ -43,6 +44,22 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchUsers();
   }, []);
+
+  // NEW: Approve User Function
+  const handleApproveUser = async (email: string) => {
+    try {
+      const res = await fetch(`${API_URL}/admin/user/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, action: 'approve' })
+      });
+      if (res.ok) {
+        fetchUsers();
+      }
+    } catch (error) {
+      console.error("Error approving user:", error);
+    }
+  };
 
   const handleKickUser = async (email: string) => {
     try {
@@ -74,7 +91,6 @@ export default function AdminDashboard() {
     }
   };
 
-  // UPDATED: Toggle Lockdown Function
   const handleLockdown = async () => {
     const actionText = isLockdown ? "LIFT the SYSTEM LOCKDOWN?" : "INITIATE SYSTEM LOCKDOWN? All user connections will be severed.";
     const confirmLockdown = window.confirm(`WARNING: Are you sure you want to ${actionText}`);
@@ -82,7 +98,7 @@ export default function AdminDashboard() {
     if (!confirmLockdown) return;
 
     try {
-      const newState = !isLockdown; // Flip the state (true -> false, false -> true)
+      const newState = !isLockdown; 
       const res = await fetch(`${API_URL}/admin/system/lockdown`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -91,7 +107,7 @@ export default function AdminDashboard() {
       const data = await res.json();
       alert(data.message);
       
-      setIsLockdown(newState); // Update the button UI
+      setIsLockdown(newState); 
       fetchUsers();
     } catch (error) {
       console.error("Lockdown execution failed:", error);
@@ -130,7 +146,6 @@ export default function AdminDashboard() {
           <p style={{ margin: 0, fontSize: '18px', color: '#0f0' }}>{new Date().toLocaleString()}</p>
           <p style={{ margin: 0, color: '#088' }}>SECURE CONNECTION ESTABLISHED</p>
           
-          {/* UPDATED: Dynamic Button UI */}
           <button 
             onClick={handleLockdown}
             style={{ 
@@ -184,11 +199,25 @@ export default function AdminDashboard() {
                     <div>{user.last_login_time ? new Date(user.last_login_time).toLocaleDateString() : 'NEVER'}</div>
                   </td>
                   <td style={{ padding: '10px' }}>
-                    <span style={{ color: user.session_active ? '#0f0' : '#888', border: `1px solid ${user.session_active ? '#0f0' : '#888'}`, padding: '2px 5px', fontSize: '12px' }}>
+                    {/* User Status (Pending/Approved) */}
+                    <div style={{ color: user.status === 'approved' ? '#0f0' : 'yellow', fontSize: '12px', marginBottom: '5px' }}>
+                      [{user.status ? user.status.toUpperCase() : 'UNKNOWN'}]
+                    </div>
+                    {/* Session Status */}
+                    <span style={{ color: user.session_active ? '#0f0' : '#888', border: `1px solid ${user.session_active ? '#0f0' : '#888'}`, padding: '2px 5px', fontSize: '10px' }}>
                       {user.session_active ? 'ACTIVE' : 'OFFLINE'}
                     </span>
                   </td>
                   <td style={{ padding: '10px' }}>
+                    {/* Approve Button (Only shows if status is not 'approved') */}
+                    {user.status !== 'approved' && (
+                      <button 
+                        onClick={() => handleApproveUser(user.email)}
+                        style={{ background: 'transparent', color: '#0ff', border: '1px solid #0ff', padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>
+                        APPROVE
+                      </button>
+                    )}
+
                     <button 
                       onClick={() => handleLockUser(user.email, user.is_locked)}
                       style={{ background: 'transparent', color: user.is_locked ? '#0f0' : 'red', border: `1px solid ${user.is_locked ? '#0f0' : 'red'}`, padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>
