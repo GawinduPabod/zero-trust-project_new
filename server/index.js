@@ -15,7 +15,10 @@ app.use(express.json({ limit: '50mb' }));
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
+    max: 20, 
+    idleTimeoutMillis: 30000, 
+    connectionTimeoutMillis: 2000, 
 });
 
 pool.connect()
@@ -28,8 +31,18 @@ const transporter = nodemailer.createTransport({
 });
 
 // ==========================================
-// SECTION 2: SYSTEM LOCKDOWN & SECURITY AI
+// SECTION 2: HIGH TRAFFIC & SECURITY CONTROLS
 // ==========================================
+const globalTrafficLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, 
+    max: 150, 
+    message: { 
+        error: "System is experiencing high traffic.", 
+        message: "Zero Trust Protocol: Too many requests. Please try again in a minute." 
+    }
+});
+app.use(globalTrafficLimiter);
+
 let SYSTEM_LOCKDOWN = false;
 const checkLockdown = (req, res, next) => {
     if (SYSTEM_LOCKDOWN && !req.path.includes('/admin')) {
@@ -53,7 +66,7 @@ const loginBruteForceLimiter = rateLimit({
 });
 
 // ==========================================
-// SECTION 3: AUTHENTICATION (REGISTER / LOGIN)
+// SECTION 3: AUTHENTICATION (REGISTER / LOGIN / OTP)
 // ==========================================
 app.post('/register', async (req, res) => {
     try {
@@ -82,7 +95,14 @@ app.post('/login', loginBruteForceLimiter, async (req, res) => {
             from: '"Zero Trust Security" <' + process.env.EMAIL_USER + '>', 
             to: email, 
             subject: "Zero Trust - Login OTP", 
-            html: `<h2>Zero Trust Workspace</h2><p>Your OTP is: <b>${otpCode}</b> (Expires in 5m)</p>` 
+            html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                <h2 style="color: #005c4b;">Zero Trust Workspace</h2>
+                <p>Your secure One-Time Password (OTP) for login is:</p>
+                <h1 style="color: #333; letter-spacing: 2px;">${otpCode}</h1>
+                <p style="color: #777; font-size: 12px;">This code will expire in 5 minutes. Do not share it with anyone.</p>
+            </div>
+            ` 
         };
         await transporter.sendMail(mailOptions);
         res.status(200).json({ message: "OTP sent successfully." });
@@ -92,6 +112,8 @@ app.post('/login', loginBruteForceLimiter, async (req, res) => {
 app.post('/verify-otp', async (req, res) => {
     try {
         const { email, otp } = req.body;
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "Unknown IP";
+        
         const userResult = await pool.query("SELECT *, (NOW() > otp_expiry) AS is_expired FROM users WHERE email = $1", [email]);
         if (userResult.rows.length === 0) return res.status(404).json({ error: "User not found." });
         
@@ -100,8 +122,17 @@ app.post('/verify-otp', async (req, res) => {
 
         if (user.otp_code !== otp) {
             const currentAttempts = (user.otp_attempts || 0) + 1;
+            
             if (currentAttempts >= 4) {
+                // Lock the account
                 await pool.query("UPDATE users SET is_locked = TRUE, otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
+                
+                // NEW: Trigger Security Alert to Admin Dashboard
+                const alertMessage = `[SECURITY ALERT] ACCOUNT AUTOLOCKED\nTarget Email: ${email}\nSource IP: ${clientIp}\nReason: Maximum failed OTP attempts (4/4) reached. Account has been disabled to prevent unauthorized access.`;
+                try {
+                    await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', null, alertMessage]);
+                } catch (dbErr) { console.error(dbErr); }
+
                 return res.status(403).json({ error: "Account locked due to 4 failed OTP attempts." });
             } else {
                 await pool.query("UPDATE users SET otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
@@ -111,7 +142,6 @@ app.post('/verify-otp', async (req, res) => {
 
         if (user.is_expired) return res.status(401).json({ error: "OTP expired." });
 
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
         await pool.query("UPDATE users SET otp_attempts = 0, otp_code = NULL, otp_expiry = NULL, last_login_time = NOW(), last_login_ip = $1, session_active = TRUE WHERE email = $2", [clientIp, email]);
         
         res.status(200).json({ message: "Login successful!", user });
@@ -123,13 +153,9 @@ app.post('/verify-otp', async (req, res) => {
 // ==========================================
 app.get('/users/approved', async (req, res) => {
     try {
-        // SELECT * prevents crashes even if profile_picture column is missing
         const result = await pool.query("SELECT * FROM users WHERE status = 'approved' ORDER BY username ASC");
         res.status(200).json(result.rows);
-    } catch (err) { 
-        console.error(err);
-        res.status(500).json({ error: "Server Error." }); 
-    }
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
 });
 
 // ==========================================
@@ -211,7 +237,6 @@ app.post('/files/download', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Download failed." }); }
 });
 
-// Profile Picture Update
 app.post('/user/profile-pic', async (req, res) => {
     try {
         const { email, profilePicture } = req.body;
@@ -256,6 +281,13 @@ app.post('/admin/copilot/chat', async (req, res) => {
         const aiResponse = await chatWithCopilot(message);
         res.status(200).json({ response: aiResponse });
     } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
+
+app.get('/admin/logs/messages', async (req, res) => { 
+    try {
+        const result = await pool.query("SELECT * FROM messages ORDER BY timestamp DESC");
+        res.json(result.rows);
+    } catch (e) { res.json([]); }
 });
 
 const PORT = process.env.PORT || 5000;
