@@ -10,7 +10,7 @@ interface User {
   last_login_time: string | null;
   session_active: boolean;
   is_locked: boolean;
-  status: string; // NEW: Added status field
+  status: string; 
 }
 
 interface ChatMessage {
@@ -18,8 +18,15 @@ interface ChatMessage {
   text: string;
 }
 
+interface SecurityLog {
+  id: number;
+  timestamp: string;
+  content: string;
+}
+
 export default function AdminDashboard() {
   const [users, setUsers] = useState<User[]>([]);
+  const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([]); // NEW: Security Logs State
   const [command, setCommand] = useState<string>('');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
     { sender: 'AI', text: 'SECURITY COPILOT INITIALIZED. AWAITING COMMANDS...' }
@@ -29,89 +36,81 @@ export default function AdminDashboard() {
 
   const API_URL = "https://zero-trust-project-new.vercel.app";
 
-  const fetchUsers = async () => {
+  const fetchData = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/users`);
-      if (res.ok) {
-        const data: User[] = await res.json();
-        setUsers(data);
+      // 1. Fetch Users
+      const resUsers = await fetch(`${API_URL}/admin/users`);
+      if (resUsers.ok) {
+        const dataUsers: User[] = await resUsers.json();
+        setUsers(dataUsers);
+      }
+
+      // 2. NEW: Fetch Security Alerts
+      const resLogs = await fetch(`${API_URL}/admin/logs/messages`);
+      if (resLogs.ok) {
+        const dataLogs = await resLogs.json();
+        // Filter only the alerts sent by AI Firewall
+        const alerts = dataLogs.filter((log: any) => log.sender_email === 'ai_admin');
+        setSecurityLogs(alerts);
       }
     } catch (err) {
-      console.error("Error fetching users:", err);
+      console.error("Error fetching data:", err);
     }
   };
 
   useEffect(() => {
-    fetchUsers();
+    fetchData();
+    const interval = setInterval(fetchData, 5000); // Update every 5 seconds
+    return () => clearInterval(interval);
   }, []);
 
-  // NEW: Approve User Function
   const handleApproveUser = async (email: string) => {
     try {
       const res = await fetch(`${API_URL}/admin/user/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, action: 'approve' })
       });
-      if (res.ok) {
-        fetchUsers();
-      }
-    } catch (error) {
-      console.error("Error approving user:", error);
-    }
+      if (res.ok) fetchData();
+    } catch (error) { console.error(error); }
   };
 
   const handleKickUser = async (email: string) => {
     try {
       const res = await fetch(`${API_URL}/admin/user/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, action: 'kick' })
       });
-      if (res.ok) {
-        alert(`User ${email} kicked successfully!`);
-        fetchUsers();
-      }
-    } catch (error) {
-      console.error("Error kicking user:", error);
-    }
+      if (res.ok) { alert(`User ${email} kicked successfully!`); fetchData(); }
+    } catch (error) { console.error(error); }
   };
 
   const handleLockUser = async (email: string, currentStatus: boolean) => {
     const action = currentStatus ? 'unlock' : 'lock';
     try {
       const res = await fetch(`${API_URL}/admin/user/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, action })
       });
-      if (res.ok) fetchUsers();
-    } catch (error) {
-      console.error("Error updating user status:", error);
-    }
+      if (res.ok) fetchData();
+    } catch (error) { console.error(error); }
   };
 
   const handleLockdown = async () => {
     const actionText = isLockdown ? "LIFT the SYSTEM LOCKDOWN?" : "INITIATE SYSTEM LOCKDOWN? All user connections will be severed.";
     const confirmLockdown = window.confirm(`WARNING: Are you sure you want to ${actionText}`);
-    
     if (!confirmLockdown) return;
 
     try {
       const newState = !isLockdown; 
       const res = await fetch(`${API_URL}/admin/system/lockdown`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: newState }) 
       });
       const data = await res.json();
       alert(data.message);
-      
       setIsLockdown(newState); 
-      fetchUsers();
-    } catch (error) {
-      console.error("Lockdown execution failed:", error);
-    }
+      fetchData();
+    } catch (error) { console.error(error); }
   };
 
   const handleChatSubmit = async (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -122,8 +121,7 @@ export default function AdminDashboard() {
       
       try {
         const res = await fetch(`${API_URL}/admin/copilot/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: command })
         });
         const data = await res.json();
@@ -145,18 +143,9 @@ export default function AdminDashboard() {
         <div style={{ textAlign: 'right' }}>
           <p style={{ margin: 0, fontSize: '18px', color: '#0f0' }}>{new Date().toLocaleString()}</p>
           <p style={{ margin: 0, color: '#088' }}>SECURE CONNECTION ESTABLISHED</p>
-          
           <button 
             onClick={handleLockdown}
-            style={{ 
-              marginTop: '10px', 
-              padding: '8px 15px', 
-              backgroundColor: isLockdown ? '#006400' : '#800000', 
-              color: '#fff', 
-              border: `1px solid ${isLockdown ? '#0f0' : 'red'}`, 
-              cursor: 'pointer', 
-              fontWeight: 'bold' 
-            }}>
+            style={{ marginTop: '10px', padding: '8px 15px', backgroundColor: isLockdown ? '#006400' : '#800000', color: '#fff', border: `1px solid ${isLockdown ? '#0f0' : 'red'}`, cursor: 'pointer', fontWeight: 'bold' }}>
             {isLockdown ? '✅ LIFT LOCKDOWN ✅' : '⚠️ INITIATE LOCKDOWN ⚠️'}
           </button>
         </div>
@@ -164,78 +153,78 @@ export default function AdminDashboard() {
 
       <div style={{ display: 'flex', gap: '20px' }}>
         
-        <div style={{ flex: 2 }}>
-          <div style={{ border: '1px solid #088', padding: '15px', marginBottom: '20px' }}>
-            <span style={{ marginRight: '15px' }}>ADD_NODE:</span>
-            <input type="text" placeholder="Username" style={{ background: 'transparent', border: '1px solid #088', color: '#0ff', padding: '5px', marginRight: '10px' }} />
-            <input type="text" placeholder="Email Address" style={{ background: 'transparent', border: '1px solid #088', color: '#0ff', padding: '5px', marginRight: '10px' }} />
-            <button style={{ background: '#0ff', color: '#000', padding: '6px 15px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>EXECUTE</button>
+        {/* LEFT COLUMN: Users & Logs */}
+        <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          {/* USER TABLE */}
+          <div>
+            <h3 style={{ color: '#0ff', margin: '0 0 10px 0' }}>// ACTIVE NODES (USERS)</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #088' }}>
+              <thead style={{ backgroundColor: '#022' }}>
+                <tr>
+                  <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>ID</th>
+                  <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>USER INFO</th>
+                  <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>NETWORK INFO</th>
+                  <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>STATUS</th>
+                  <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>CONTROLS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user, index) => (
+                  <tr key={user.id} style={{ borderBottom: '1px solid #044' }}>
+                    <td style={{ padding: '10px', color: '#088' }}>#{index + 1}</td>
+                    <td style={{ padding: '10px' }}>
+                      <div style={{ fontWeight: 'bold', color: '#fff' }}>{user.username}</div>
+                      <div style={{ fontSize: '12px', color: '#888' }}>{user.email}</div>
+                    </td>
+                    <td style={{ padding: '10px', fontSize: '12px' }}>
+                      <div>IP: <span style={{ color: '#0ff' }}>{user.last_login_ip || 'NULL'}</span></div>
+                      <div>{user.last_login_time ? new Date(user.last_login_time).toLocaleDateString() : 'NEVER'}</div>
+                    </td>
+                    <td style={{ padding: '10px' }}>
+                      <div style={{ color: user.status === 'approved' ? '#0f0' : 'yellow', fontSize: '12px', marginBottom: '5px' }}>
+                        [{user.status ? user.status.toUpperCase() : 'UNKNOWN'}]
+                      </div>
+                      <span style={{ color: user.session_active ? '#0f0' : '#888', border: `1px solid ${user.session_active ? '#0f0' : '#888'}`, padding: '2px 5px', fontSize: '10px' }}>
+                        {user.session_active ? 'ACTIVE' : 'OFFLINE'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px' }}>
+                      {user.status !== 'approved' && (
+                        <button onClick={() => handleApproveUser(user.email)} style={{ background: 'transparent', color: '#0ff', border: '1px solid #0ff', padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>APPROVE</button>
+                      )}
+                      <button onClick={() => handleLockUser(user.email, user.is_locked)} style={{ background: 'transparent', color: user.is_locked ? '#0f0' : 'red', border: `1px solid ${user.is_locked ? '#0f0' : 'red'}`, padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>
+                        {user.is_locked ? 'UNLOCK' : 'LOCK'}
+                      </button>
+                      <button onClick={() => handleKickUser(user.email)} style={{ background: 'transparent', color: 'orange', border: '1px solid orange', padding: '3px 8px', cursor: 'pointer' }}>KICK</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          <button style={{ background: 'transparent', color: '#0ff', border: '1px solid #0ff', padding: '5px 15px', marginBottom: '20px', cursor: 'pointer' }}>
-            [ DOWNLOAD_LOGS.CSV ]
-          </button>
+          {/* NEW: SECURITY ALERTS LOGS */}
+          <div style={{ marginTop: '10px' }}>
+            <h3 style={{ color: 'red', borderBottom: '1px solid red', paddingBottom: '5px', margin: '0 0 10px 0' }}>🚨 SYSTEM SECURITY ALERTS</h3>
+            <div style={{ height: '250px', overflowY: 'auto', border: '1px solid #800', backgroundColor: '#100000', padding: '15px' }}>
+              {securityLogs.length === 0 ? (
+                <p style={{ color: '#0f0', margin: 0 }}>[+] System is secure. No recent breaches detected.</p>
+              ) : (
+                securityLogs.map((log, i) => (
+                  <div key={i} style={{ borderBottom: '1px dashed #400', paddingBottom: '10px', marginBottom: '10px' }}>
+                    <div style={{ color: 'yellow', fontSize: '12px', marginBottom: '5px' }}>[{new Date(log.timestamp).toLocaleString()}]</div>
+                    <div style={{ color: '#ff4444', fontSize: '14px', whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{log.content}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #088' }}>
-            <thead style={{ backgroundColor: '#022' }}>
-              <tr>
-                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>ID</th>
-                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>USER INFO</th>
-                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>NETWORK INFO</th>
-                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>STATUS</th>
-                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #088' }}>CONTROLS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user, index) => (
-                <tr key={user.id} style={{ borderBottom: '1px solid #044' }}>
-                  <td style={{ padding: '10px', color: '#088' }}>#{index + 1}</td>
-                  <td style={{ padding: '10px' }}>
-                    <div style={{ fontWeight: 'bold', color: '#fff' }}>{user.username}</div>
-                    <div style={{ fontSize: '12px', color: '#888' }}>{user.email}</div>
-                  </td>
-                  <td style={{ padding: '10px', fontSize: '12px' }}>
-                    <div>IP: <span style={{ color: '#0ff' }}>{user.last_login_ip || 'NULL'}</span></div>
-                    <div>{user.last_login_time ? new Date(user.last_login_time).toLocaleDateString() : 'NEVER'}</div>
-                  </td>
-                  <td style={{ padding: '10px' }}>
-                    {/* User Status (Pending/Approved) */}
-                    <div style={{ color: user.status === 'approved' ? '#0f0' : 'yellow', fontSize: '12px', marginBottom: '5px' }}>
-                      [{user.status ? user.status.toUpperCase() : 'UNKNOWN'}]
-                    </div>
-                    {/* Session Status */}
-                    <span style={{ color: user.session_active ? '#0f0' : '#888', border: `1px solid ${user.session_active ? '#0f0' : '#888'}`, padding: '2px 5px', fontSize: '10px' }}>
-                      {user.session_active ? 'ACTIVE' : 'OFFLINE'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '10px' }}>
-                    {/* Approve Button (Only shows if status is not 'approved') */}
-                    {user.status !== 'approved' && (
-                      <button 
-                        onClick={() => handleApproveUser(user.email)}
-                        style={{ background: 'transparent', color: '#0ff', border: '1px solid #0ff', padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>
-                        APPROVE
-                      </button>
-                    )}
-
-                    <button 
-                      onClick={() => handleLockUser(user.email, user.is_locked)}
-                      style={{ background: 'transparent', color: user.is_locked ? '#0f0' : 'red', border: `1px solid ${user.is_locked ? '#0f0' : 'red'}`, padding: '3px 8px', cursor: 'pointer', marginRight: '10px' }}>
-                      {user.is_locked ? 'UNLOCK' : 'LOCK'}
-                    </button>
-                    <button 
-                      onClick={() => handleKickUser(user.email)}
-                      style={{ background: 'transparent', color: 'orange', border: '1px solid orange', padding: '3px 8px', cursor: 'pointer' }}>
-                      KICK
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
 
-        <div style={{ flex: 1, border: '1px solid #088', display: 'flex', flexDirection: 'column', height: '70vh' }}>
+        {/* RIGHT COLUMN: AI Copilot */}
+        <div style={{ flex: 1, border: '1px solid #088', display: 'flex', flexDirection: 'column', height: '80vh' }}>
           <div style={{ padding: '10px', backgroundColor: '#022', borderBottom: '1px solid #088', display: 'flex', justifyContent: 'space-between' }}>
             <strong>SECURITY_COPILOT</strong>
             <span style={{ fontSize: '12px', color: '#088' }}>[AI MODULE]</span>
@@ -244,9 +233,7 @@ export default function AdminDashboard() {
           <div style={{ flex: 1, padding: '15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {chatHistory.map((chat, idx) => (
               <div key={idx} style={{ alignSelf: chat.sender === 'ADMIN' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-                <div style={{ fontSize: '10px', color: '#088', marginBottom: '2px', textAlign: chat.sender === 'ADMIN' ? 'right' : 'left' }}>
-                  {chat.sender}
-                </div>
+                <div style={{ fontSize: '10px', color: '#088', marginBottom: '2px', textAlign: chat.sender === 'ADMIN' ? 'right' : 'left' }}>{chat.sender}</div>
                 <div style={{ border: '1px solid #088', padding: '10px', backgroundColor: chat.sender === 'ADMIN' ? '#011' : 'transparent', color: '#0ff' }}>
                   <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>{chat.text}</pre>
                 </div>
