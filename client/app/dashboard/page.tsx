@@ -25,7 +25,6 @@ export default function UserDashboard() {
   const profilePicInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize User and Clock
   useEffect(() => {
     const userStr = localStorage.getItem("zeroTrustUser");
     if (!userStr) {
@@ -42,33 +41,24 @@ export default function UserDashboard() {
   // ==========================================
   // SECTION 2: SAFE DATA FETCHING
   // ==========================================
-  
-  // Fetch Users Safely (Prevents crashing if DB fails)
   useEffect(() => {
     const fetchUsers = async () => {
       try {
         const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
         const data = await res.json();
-        // SAFE CHECK: Check if data is actually an array before filtering
         if (Array.isArray(data)) {
           setUsers(data.filter((u: any) => u.email !== currentUser?.email));
-        } else {
-          console.error("Backend Error: Expected array but got", data);
         }
-      } catch (err) {
-        console.error("Failed to fetch users");
-      }
+      } catch (err) {}
     };
     if (currentUser) fetchUsers();
     const userInterval = setInterval(() => { if (currentUser) fetchUsers(); }, 5000);
     return () => clearInterval(userInterval);
   }, [currentUser]);
 
-  // Fetch Messages and Files Safely
   const fetchData = async () => {
     if (!currentUser || !selectedContact) return;
     
-    // Fetch Messages
     try {
       const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -90,7 +80,6 @@ export default function UserDashboard() {
       }
     } catch (err) {}
 
-    // Fetch Files
     try {
       const fileRes = await fetch("https://zero-trust-project-new.vercel.app/files/list", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -119,7 +108,6 @@ export default function UserDashboard() {
   // ==========================================
   // SECTION 3: USER ACTIONS (MESSAGES & FILES)
   // ==========================================
-  
   const handleSendMessage = async (e: any) => {
     e.preventDefault();
     if (!messageInput.trim() || !selectedContact) return;
@@ -136,10 +124,8 @@ export default function UserDashboard() {
       if (res.ok) {
         setMessageInput("");
         fetchData();
-      } else {
-        alert("Failed to send message. Make sure the Vercel backend has updated.");
       }
-    } catch (err) { alert("Network connection error."); }
+    } catch (err) {}
   };
 
   const handleSendFile = (e: any) => {
@@ -156,11 +142,12 @@ export default function UserDashboard() {
           body: JSON.stringify({ sender_email: currentUser.email, receiver_email: receiver, file_name: file.name, file_data: encryptedFile }),
         });
         if(res.ok) { alert(`File sent.`); fetchData(); }
-      } catch (err) { alert("File upload failed."); }
+      } catch (err) {}
     };
     reader.readAsDataURL(file);
   };
 
+  // UPDATED: Added better alert and logic for Request OTP
   const handleRequestOTP = async (fileId: number) => {
     try {
       const res = await fetch("https://zero-trust-project-new.vercel.app/files/request-otp", {
@@ -168,10 +155,12 @@ export default function UserDashboard() {
         body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),
       });
       if(res.ok) {
-        alert("OTP sent to your email.");
+        alert("OTP sent to your email! (Please check your Inbox and Spam/Junk folder)");
         setRequestingFileId(fileId);
+      } else {
+        alert("Failed to send OTP. Server might be busy.");
       }
-    } catch (err) { alert("Failed to request OTP."); }
+    } catch (err) { alert("Network connection error. Failed to request OTP."); }
   };
 
   const handleDownloadFile = async (e: any, fileId: number) => {
@@ -199,6 +188,31 @@ export default function UserDashboard() {
     window.location.href = "/login";
   };
 
+  const handleProfilePicChange = (e: any) => {
+    const file = e.target.files[0];
+    if (!file || !currentUser) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64Pic = event.target?.result as string;
+      try {
+        const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),
+        });
+        
+        if (res.ok) {
+          const updatedUser = { ...currentUser, profile_picture: base64Pic };
+          setCurrentUser(updatedUser);
+          localStorage.setItem("zeroTrustUser", JSON.stringify(updatedUser));
+          alert("Profile picture updated securely.");
+        }
+      } catch (err) {}
+    };
+    reader.readAsDataURL(file);
+  };
+
   const combinedFeed = [...messages, ...files].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;
@@ -209,13 +223,22 @@ export default function UserDashboard() {
   return (
     <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">
       
-      {/* LEFT SIDEBAR: Contacts */}
+      {/* LEFT SIDEBAR */}
       <div className="w-1/3 max-w-[400px] border-r border-[#202c33] flex flex-col bg-[#111b21]">
         <div className="bg-[#202c33] p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gray-600 overflow-hidden flex items-center justify-center text-xl font-bold">
-              {currentUser.username.charAt(0).toUpperCase()}
+            <div 
+              className="w-10 h-10 rounded-full bg-gray-600 overflow-hidden flex items-center justify-center text-xl font-bold cursor-pointer hover:opacity-80"
+              onClick={() => profilePicInputRef.current?.click()}
+              title="Click to change Profile Picture"
+            >
+              {currentUser.profile_picture ? (
+                <img src={currentUser.profile_picture} alt="DP" className="w-full h-full object-cover" />
+              ) : (
+                currentUser.username.charAt(0).toUpperCase()
+              )}
             </div>
+            <input type="file" accept="image/*" ref={profilePicInputRef} className="hidden" onChange={handleProfilePicChange} />
             <div>
               <h2 className="font-bold text-sm">{currentUser.username}</h2>
               <p className="text-[10px] text-green-400">{currentTime}</p>
@@ -238,14 +261,16 @@ export default function UserDashboard() {
 
           {users.map(u => (
             <div key={u.email} onClick={() => setSelectedContact(u)} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === u.email ? 'bg-[#2a3942]' : ''}`}>
-              <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center text-xl font-bold">{u.username.charAt(0).toUpperCase()}</div>
+              <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden text-xl font-bold">
+                {u.profile_picture ? <img src={u.profile_picture} alt="DP" className="w-full h-full object-cover" /> : u.username.charAt(0).toUpperCase()}
+              </div>
               <div><h3 className="font-bold">{u.username}</h3><p className="text-xs text-gray-400">{u.email}</p></div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* RIGHT SIDEBAR: Chat Area */}
+      {/* RIGHT SIDEBAR */}
       <div className="flex-1 flex flex-col relative bg-[#0b141a]">
         {!selectedContact ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center px-10">
@@ -255,7 +280,9 @@ export default function UserDashboard() {
         ) : (
           <>
             <div className="bg-[#202c33] p-4 flex items-center gap-4 border-b border-[#111b21]">
-              <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-lg font-bold">{selectedContact.username.charAt(0).toUpperCase()}</div>
+              <div className="w-10 h-10 rounded-full bg-gray-700 overflow-hidden flex items-center justify-center text-lg font-bold">
+                {selectedContact.email === 'global' ? 'GL' : selectedContact.email === 'ai_admin' ? 'AI' : selectedContact.profile_picture ? <img src={selectedContact.profile_picture} className="w-full h-full object-cover" /> : selectedContact.username.charAt(0).toUpperCase()}
+              </div>
               <div>
                 <h2 className="font-bold">{selectedContact.username}</h2>
                 <p className="text-xs text-green-500">End-to-End Encrypted Connection</p>
@@ -275,15 +302,28 @@ export default function UserDashboard() {
                   );
                 } else {
                   return (
-                    <div key={`file-${index}`} className={`flex flex-col max-w-[70%] ${isMine ? 'self-end' : 'self-start'}`}>
+                    <div key={`file-${item.id}`} className={`flex flex-col max-w-[70%] ${isMine ? 'self-end' : 'self-start'}`}>
                       <div className={`bg-[#202c33] p-4 rounded-lg shadow border border-gray-700 ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
                         <p className="font-bold text-sm text-blue-400">📎 {item.file_name}</p>
-                        {isMine ? <p className="text-xs text-green-300 mt-2">Encrypted & Sent</p> : requestingFileId === item.id ? (
-                          <form onSubmit={(e) => handleDownloadFile(e, item.id)} className="flex gap-2 mt-2">
-                            <input type="text" placeholder="OTP" value={otpInput} onChange={(e) => setOtpInput(e.target.value)} required className="bg-[#2a3942] w-24 text-center text-white rounded p-1" />
-                            <button type="submit" className="bg-green-600 px-3 py-1 rounded text-xs font-bold">Unlock</button>
-                          </form>
-                        ) : <button onClick={() => handleRequestOTP(item.id)} className="bg-blue-600 px-4 py-2 rounded text-xs font-bold mt-2">Request OTP to Download</button>}
+                        
+                        {/* UPDATED: Resend OTP and Cancel Buttons Added */}
+                        {isMine ? (
+                          <p className="text-xs text-green-300 mt-2">Encrypted & Sent</p>
+                        ) : requestingFileId === item.id ? (
+                          <div className="mt-3 flex flex-col gap-2">
+                            <form onSubmit={(e) => handleDownloadFile(e, item.id)} className="flex gap-2">
+                              <input type="text" placeholder="OTP" value={otpInput} onChange={(e) => setOtpInput(e.target.value)} required className="bg-[#2a3942] w-24 text-center text-white rounded p-1" />
+                              <button type="submit" className="bg-green-600 hover:bg-green-500 transition-colors px-3 py-1 rounded text-xs font-bold">Unlock</button>
+                            </form>
+                            <div className="flex gap-4 mt-1 text-[11px] font-bold">
+                              <button onClick={() => handleRequestOTP(item.id)} className="text-blue-400 hover:text-blue-300 underline">Resend OTP</button>
+                              <button onClick={() => {setRequestingFileId(null); setOtpInput("");}} className="text-red-400 hover:text-red-300 underline">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => handleRequestOTP(item.id)} className="bg-blue-600 hover:bg-blue-500 transition-colors px-4 py-2 rounded text-xs font-bold mt-2 w-full text-center">Request OTP to Download</button>
+                        )}
+
                       </div>
                     </div>
                   );
