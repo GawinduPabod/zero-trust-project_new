@@ -1,476 +1,263 @@
-"use client";
-import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
-import CryptoJS from "crypto-js";
+// ==========================================
+// SECTION 1: IMPORTS & DATABASE CONNECTION
+// ==========================================
+const express = require('express');
+const cors = require('cors');
+const { Pool } = require('pg');
+const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
+const { generateSecurityReport, chatWithCopilot } = require('./aiSecurityBot');
 
-const SECRET_KEY = "ZeroTrustMasterKey2026";
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
-export default function UserDashboard() {
-  const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  
-  const [users, setUsers] = useState<any[]>([]);
-  const [selectedContact, setSelectedContact] = useState<any>(null); 
-  const [messages, setMessages] = useState<any[]>([]);
-  const [files, setFiles] = useState<any[]>([]);
-  
-  const [messageInput, setMessageInput] = useState("");
-  const [otpInput, setOtpInput] = useState("");
-  const [requestingFileId, setRequestingFileId] = useState<number | null>(null);
-  const [currentTime, setCurrentTime] = useState("");
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const profilePicInputRef = useRef<HTMLInputElement>(null);
-  const fileUploadInputRef = useRef<HTMLInputElement>(null);
+pool.connect()
+  .then(() => console.log("Neon Database connected successfully!"))
+  .catch(err => console.error("Database Connection Error:", err));
 
-  useEffect(() => {
-    const userStr = localStorage.getItem("zeroTrustUser");
-    if (!userStr) {
-      router.push("/login");
-    } else {
-      setCurrentUser(JSON.parse(userStr));
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+});
+
+// ==========================================
+// SECTION 2: SYSTEM LOCKDOWN & SECURITY AI
+// ==========================================
+let SYSTEM_LOCKDOWN = false;
+const checkLockdown = (req, res, next) => {
+    if (SYSTEM_LOCKDOWN && !req.path.includes('/admin')) {
+        return res.status(503).json({ error: "SYSTEM LOCKDOWN ACTIVE", message: "Zero Trust Protocol initiated." });
     }
+    next();
+};
+app.use(checkLockdown);
 
-    const timer = setInterval(() => {
-      setCurrentTime(new Date().toLocaleTimeString("en-US", { hour12: true, hour: '2-digit', minute:'2-digit', second:'2-digit' }));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+const loginBruteForceLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, max: 3, 
+    handler: async (req, res) => {
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const targetEmail = req.body.email || "Unknown";
+        const aiReport = await generateSecurityReport("Brute-Force", clientIp, targetEmail);
+        try {
+            await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', targetEmail !== "Unknown" ? targetEmail : null, aiReport]);
+        } catch (dbErr) {}
+        res.status(429).json({ error: "Security breach detected! IP blocked." });
+    }
+});
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
-        const data = await res.json();
-        setUsers(data.filter((u: any) => u.email !== currentUser?.email));
-      } catch (err) {
-        console.error("Failed to fetch users");
-      }
-    };
-    if (currentUser) fetchUsers();
-    const userInterval = setInterval(() => { if (currentUser) fetchUsers(); }, 5000);
-    return () => clearInterval(userInterval);
-  }, [currentUser]);
-
-  // 1. IMPROVED: Fetch Data Function (Safely separated)
-  const fetchData = async () => {
-    if (!currentUser || !selectedContact) return;
-    
-    // Fetch Messages Safely
+// ==========================================
+// SECTION 3: AUTHENTICATION (REGISTER / LOGIN)
+// ==========================================
+app.post('/register', async (req, res) => {
     try {
-      const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
-      });
-      
-      if (msgRes.ok) {
-        const msgData = await msgRes.json();
-        if (Array.isArray(msgData)) {
-          const decryptedMessages = msgData.map((msg: any) => {
-            try {
-              const bytes = CryptoJS.AES.decrypt(msg.content, SECRET_KEY);
-              const decryptedText = bytes.toString(CryptoJS.enc.Utf8);
-              msg.content = decryptedText ? decryptedText : msg.content; // Fallback if plain text
-            } catch (e) {
-              msg.content = "[Encrypted Data]";
+        const { username, email } = req.body;
+        const userExists = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userExists.rows.length > 0) return res.status(401).json({ error: "Email already registered." });
+        const newUser = await pool.query("INSERT INTO users (username, email) VALUES ($1, $2) RETURNING id, username, email, status;", [username, email]);
+        res.status(201).json({ message: "Registration successful.", user: newUser.rows[0] });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
+
+app.post('/login', loginBruteForceLimiter, async (req, res) => {
+    try {
+        const { username, email, location } = req.body;
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1 AND username = $2", [email, username]);
+        if (userResult.rows.length === 0) return res.status(401).json({ error: "Invalid Credentials." });
+        
+        const user = userResult.rows[0];
+        if (user.status === 'pending') return res.status(403).json({ error: "Account pending approval." });
+        if (user.is_locked) return res.status(403).json({ error: "Account is locked." });
+
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await pool.query("UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes', last_login_location = $2 WHERE email = $3", [otpCode, location, email]);
+
+        const mailOptions = { 
+            from: '"Zero Trust Security" <' + process.env.EMAIL_USER + '>', 
+            to: email, 
+            subject: "Zero Trust - Login OTP", 
+            html: `<h2>Zero Trust Workspace</h2><p>Your OTP is: <b>${otpCode}</b> (Expires in 5m)</p>` 
+        };
+        await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: "OTP sent successfully." });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
+
+app.post('/verify-otp', async (req, res) => {
+    try {
+        const { email, otp } = req.body;
+        const userResult = await pool.query("SELECT *, (NOW() > otp_expiry) AS is_expired FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: "User not found." });
+        
+        const user = userResult.rows[0];
+        if (user.is_locked) return res.status(403).json({ error: "Account locked." });
+
+        if (user.otp_code !== otp) {
+            const currentAttempts = (user.otp_attempts || 0) + 1;
+            if (currentAttempts >= 4) {
+                await pool.query("UPDATE users SET is_locked = TRUE, otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
+                return res.status(403).json({ error: "Account locked due to 4 failed OTP attempts." });
+            } else {
+                await pool.query("UPDATE users SET otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
+                return res.status(401).json({ error: `Invalid OTP. ${4 - currentAttempts} attempts remaining.` });
             }
-            return { ...msg, type: 'message' };
-          });
-          setMessages(decryptedMessages);
         }
-      }
-    } catch (err) {
-      console.error("Fetch Messages Error", err);
-    }
 
-    // Fetch Files Safely
-    try {
-      const fileRes = await fetch("https://zero-trust-project-new.vercel.app/files/list", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
-      });
-      
-      if (fileRes.ok) {
-        const fileData = await fileRes.json();
-        if (Array.isArray(fileData)) {
-          const formattedFiles = fileData.map((f:any) => ({...f, type: 'file'}));
-          setFiles(formattedFiles);
-        }
-      }
-    } catch (err) {
-      console.error("Fetch Files Error", err);
-    }
-  };
+        if (user.is_expired) return res.status(401).json({ error: "OTP expired." });
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 3000); 
-    return () => clearInterval(interval);
-  }, [selectedContact, currentUser]);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, files]);
-
-  const handleProfilePicChange = (e: any) => {
-    const file = e.target.files[0];
-    if (!file || !currentUser) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64Pic = event.target?.result as string;
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),
-        });
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        await pool.query("UPDATE users SET otp_attempts = 0, otp_code = NULL, otp_expiry = NULL, last_login_time = NOW(), last_login_ip = $1, session_active = TRUE WHERE email = $2", [clientIp, email]);
         
-        if (res.ok) {
-          const updatedUser = { ...currentUser, profile_picture: base64Pic };
-          setCurrentUser(updatedUser);
-          localStorage.setItem("zeroTrustUser", JSON.stringify(updatedUser));
-          alert("Profile picture updated securely.");
-        }
-      } catch (err) {}
-    };
-    reader.readAsDataURL(file);
-  };
+        res.status(200).json({ message: "Login successful!", user });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-  // 2. IMPROVED: Send Message with Error Alert
-  const handleSendMessage = async (e: any) => {
-    e.preventDefault();
-    if (!messageInput.trim() || !selectedContact) return;
-
-    if (selectedContact.email === 'ai_admin') {
-       alert("Security AI is currently offline for maintenance. Messages will be stored.");
-    }
-
-    const encryptedText = CryptoJS.AES.encrypt(messageInput, SECRET_KEY).toString();
-    const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
-
+// ==========================================
+// SECTION 4: FETCH APPROVED USERS
+// ==========================================
+app.get('/users/approved', async (req, res) => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/messages/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender_email: currentUser.email,
-          receiver_email: receiver,
-          content: encryptedText, 
-        }),
-      });
-      
-      if (!res.ok) {
-        alert(`Failed to send message (Error: ${res.status}). Your Backend might not be updated on Vercel yet.`);
-        return;
-      }
-      
-      setMessageInput("");
-      fetchData();
-    } catch (err) {
-      alert("Network error: Could not connect to the server.");
+        // SELECT * prevents crashes even if profile_picture column is missing
+        const result = await pool.query("SELECT * FROM users WHERE status = 'approved' ORDER BY username ASC");
+        res.status(200).json(result.rows);
+    } catch (err) { 
+        console.error(err);
+        res.status(500).json({ error: "Server Error." }); 
     }
-  };
+});
 
-  const handleSendFile = (e: any) => {
-    const file = e.target.files[0];
-    if (!file || !selectedContact) return;
+// ==========================================
+// SECTION 5: MESSAGING SYSTEM
+// ==========================================
+app.post('/messages/send', async (req, res) => {
+    try {
+        const { sender_email, receiver_email, content } = req.body;
+        const result = await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3) RETURNING *", [sender_email, receiver_email, content]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Message send failed." }); }
+});
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64File = event.target?.result as string;
-      const encryptedFile = CryptoJS.AES.encrypt(base64File, SECRET_KEY).toString();
-      const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
-
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/files/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sender_email: currentUser.email,
-            receiver_email: receiver,
-            file_name: file.name,
-            file_data: encryptedFile, 
-          }),
-        });
-        if(res.ok) {
-          alert(`Encrypted file '${file.name}' sent successfully.`);
-          fetchData(); 
+app.post('/messages/get', async (req, res) => {
+    try {
+        const { email, chat_with } = req.body;
+        let result;
+        if (chat_with === 'global' || !chat_with) {
+            result = await pool.query("SELECT * FROM messages WHERE receiver_email IS NULL OR receiver_email = 'global' ORDER BY timestamp ASC");
+        } else if (chat_with === 'ai_admin') {
+            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = 'ai_admin') OR (sender_email = 'ai_admin' AND receiver_email = $1) ORDER BY timestamp ASC", [email]);
         } else {
-          alert("File upload failed. Ensure the 'files' table exists in the database.");
+            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
         }
-      } catch (err) {
-        alert("File upload connection failed.");
-      }
-    };
-    reader.readAsDataURL(file);
-  };
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Failed to fetch conversation." }); }
+});
 
-  const handleRequestOTP = async (fileId: number) => {
+// ==========================================
+// SECTION 6: SECURE FILE TRANSFER
+// ==========================================
+app.post('/files/upload', async (req, res) => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/files/request-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),
-      });
-      if(res.ok) {
-        alert("An OTP has been sent to your email to unlock this file.");
-        setRequestingFileId(fileId);
-      }
-    } catch (err) {
-      alert("Failed to request OTP.");
-    }
-  };
+        const { sender_email, receiver_email, file_name, file_data } = req.body;
+        const result = await pool.query("INSERT INTO files (sender_email, receiver_email, file_name, file_data) VALUES ($1, $2, $3, $4) RETURNING *", [sender_email, receiver_email, file_name, file_data]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "File upload failed." }); }
+});
 
-  const handleDownloadFile = async (e: any, fileId: number) => {
-    e.preventDefault();
+app.post('/files/list', async (req, res) => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/files/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: fileId, otp: otpInput }),
-      });
-      const data = await res.json();
+        const { email, chat_with } = req.body;
+        let result;
+        if (chat_with === 'global') {
+            result = await pool.query("SELECT id, sender_email, receiver_email, file_name, timestamp FROM files WHERE receiver_email IS NULL OR receiver_email = 'global' ORDER BY timestamp ASC");
+        } else {
+            result = await pool.query("SELECT id, sender_email, receiver_email, file_name, timestamp FROM files WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
+        }
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Failed to fetch files." }); }
+});
 
-      if (res.ok) {
-        const bytes = CryptoJS.AES.decrypt(data.file_data, SECRET_KEY);
-        const decryptedBase64 = bytes.toString(CryptoJS.enc.Utf8);
-
-        const a = document.createElement("a");
-        a.href = decryptedBase64;
-        a.download = data.file_name;
-        a.click();
+app.post('/files/request-otp', async (req, res) => {
+    try {
+        const { file_id, receiver_email } = req.body;
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await pool.query("UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE email = $2", [otpCode, receiver_email]);
         
-        setRequestingFileId(null);
-        setOtpInput("");
-      } else {
-        alert(data.error);
-      }
-    } catch (err) {
-      alert("Download failed.");
-    }
-  };
+        const mailOptions = {
+            from: '"Zero Trust Security" <' + process.env.EMAIL_USER + '>',
+            to: receiver_email,
+            subject: "Secure File Download OTP",
+            html: `<p>Your OTP to unlock this file is: <b>${otpCode}</b></p>`
+        };
+        await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: "OTP sent" });
+    } catch (err) { res.status(500).json({ error: "OTP request failed." }); }
+});
 
-  const handleLogout = () => {
-    localStorage.removeItem("zeroTrustUser");
-    window.location.href = "/login";
-  };
-
-  const combinedFeed = [...messages, ...files].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-  if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;
-
-  return (
-    <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">
-      
-      {/* LEFT SIDEBAR */}
-      <div className="w-1/3 max-w-[400px] border-r border-[#202c33] flex flex-col bg-[#111b21]">
+app.post('/files/download', async (req, res) => {
+    try {
+        const { file_id, otp } = req.body;
+        const userResult = await pool.query("SELECT * FROM users WHERE otp_code = $1 AND NOW() <= otp_expiry", [otp]);
+        if(userResult.rows.length === 0) return res.status(401).json({ error: "Invalid or expired OTP." });
         
-        <div className="bg-[#202c33] p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div 
-              className="w-10 h-10 rounded-full bg-gray-600 cursor-pointer overflow-hidden border border-gray-500 hover:opacity-80 flex items-center justify-center text-xl font-bold"
-              onClick={() => profilePicInputRef.current?.click()}
-              title="Click to change Profile Picture"
-            >
-              {currentUser.profile_picture ? (
-                <img src={currentUser.profile_picture} alt="DP" className="w-full h-full object-cover" />
-              ) : (
-                currentUser.username.charAt(0).toUpperCase()
-              )}
-            </div>
-            <input type="file" accept="image/*" ref={profilePicInputRef} className="hidden" onChange={handleProfilePicChange} />
-            
-            <div>
-              <h2 className="font-bold text-sm">{currentUser.username}</h2>
-              <p className="text-[10px] text-green-400">{currentTime}</p>
-            </div>
-          </div>
-          <button onClick={handleLogout} className="text-gray-400 hover:text-red-400" title="Logout">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
-          </button>
-        </div>
+        await pool.query("UPDATE users SET otp_code = NULL WHERE id = $1", [userResult.rows[0].id]);
+        const fileResult = await pool.query("SELECT * FROM files WHERE id = $1", [file_id]);
+        res.status(200).json(fileResult.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Download failed." }); }
+});
 
-        <div className="flex-1 overflow-y-auto bg-[#111b21]">
-          {/* AI Security Admin Chat */}
-          <div 
-            onClick={() => setSelectedContact({ username: "Security Admin (AI)", email: "ai_admin" })}
-            className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'ai_admin' ? 'bg-[#2a3942]' : ''}`}
-          >
-            <div className="w-12 h-12 rounded-full bg-teal-900 flex items-center justify-center border border-teal-500 shadow-[0_0_10px_rgba(20,184,166,0.5)] text-teal-400">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-            </div>
-            <div>
-              <h3 className="font-bold text-teal-400">Security Admin (AI)</h3>
-              <p className="text-xs text-gray-400">Secure automated assistant</p>
-            </div>
-          </div>
+// Profile Picture Update
+app.post('/user/profile-pic', async (req, res) => {
+    try {
+        const { email, profilePicture } = req.body;
+        await pool.query("UPDATE users SET profile_picture = $1 WHERE email = $2", [profilePicture, email]);
+        res.status(200).json({ message: "Profile picture updated" });
+    } catch (err) { res.status(500).json({ error: "Failed" }); }
+});
 
-          {/* Global Chat Item */}
-          <div 
-            onClick={() => setSelectedContact({ username: "Global Chat Room", email: "global" })}
-            className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'global' ? 'bg-[#2a3942]' : ''}`}
-          >
-            <div className="w-12 h-12 rounded-full bg-blue-900 flex items-center justify-center border border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)] text-blue-400">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            </div>
-            <div>
-              <h3 className="font-bold text-blue-400">Global Chat Room</h3>
-              <p className="text-xs text-gray-400">Broadcast to all active users</p>
-            </div>
-          </div>
+// ==========================================
+// SECTION 7: ADMIN CONTROLS
+// ==========================================
+app.get('/admin/users', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM users ORDER BY id ASC");
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-          {/* User Items */}
-          {users.map(u => (
-            <div 
-              key={u.email} 
-              onClick={() => setSelectedContact(u)}
-              className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] transition-colors ${selectedContact?.email === u.email ? 'bg-[#2a3942]' : ''}`}
-            >
-              <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden text-xl font-bold">
-                {u.profile_picture ? (
-                  <img src={u.profile_picture} alt="DP" className="w-full h-full object-cover" />
-                ) : (
-                  u.username.charAt(0).toUpperCase()
-                )}
-              </div>
-              <div>
-                <h3 className="font-bold">{u.username}</h3>
-                <p className="text-xs text-gray-400">{u.email}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+app.post('/admin/user/action', async (req, res) => {
+    try {
+        const { email, action } = req.body;
+        if (action === 'approve') await pool.query("UPDATE users SET status = 'approved' WHERE email = $1", [email]);
+        else if (action === 'lock') await pool.query("UPDATE users SET is_locked = TRUE WHERE email = $1", [email]);
+        else if (action === 'unlock') await pool.query("UPDATE users SET is_locked = FALSE, otp_attempts = 0 WHERE email = $1", [email]);
+        else if (action === 'kick') await pool.query("UPDATE users SET session_active = FALSE WHERE email = $1", [email]);
+        res.status(200).json({ message: `User updated.` });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-      {/* RIGHT MAIN CHAT AREA */}
-      <div className="flex-1 flex flex-col relative bg-[#0b141a]">
-        
-        {!selectedContact ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center px-10">
-            <h1 className="text-4xl font-light mb-4">Zero Trust Workspace</h1>
-            <p className="text-gray-400">Select a contact or the AI Admin to start an encrypted conversation.</p>
-            <p className="text-gray-500 text-sm mt-4">All messages and files are secured with AES encryption.</p>
-          </div>
-        ) : (
-          <>
-            <div className="bg-[#202c33] p-4 flex items-center gap-4 border-b border-[#111b21]">
-              <div className="w-10 h-10 rounded-full bg-gray-700 overflow-hidden flex items-center justify-center text-lg font-bold text-gray-300">
-                {selectedContact.email === 'global' ? (
-                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                ) : selectedContact.email === 'ai_admin' ? (
-                  <svg className="w-5 h-5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-                ) : (
-                  selectedContact.profile_picture ? <img src={selectedContact.profile_picture} className="w-full h-full object-cover" /> : selectedContact.username.charAt(0).toUpperCase()
-                )}
-              </div>
-              <div>
-                <h2 className="font-bold">{selectedContact.username}</h2>
-                <p className="text-xs text-green-500 flex items-center gap-1">
-                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd"></path></svg>
-                  End-to-End Encrypted Connection
-                </p>
-              </div>
-            </div>
+app.post('/admin/system/lockdown', async (req, res) => {
+    try {
+        const { state } = req.body;
+        SYSTEM_LOCKDOWN = state;
+        if(state) await pool.query("UPDATE users SET session_active = FALSE");
+        res.status(200).json({ message: state ? "LOCKDOWN ENGAGED" : "LOCKDOWN LIFTED" });
+    } catch (err) { res.status(500).json({ error: "Failed." }); }
+});
 
-            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 bg-[#0b141a]">
-              <div className="text-center text-xs text-yellow-500 bg-[#182229] p-2 rounded w-max mx-auto mb-4 border border-yellow-900/50">
-                Messages to this chat and calls are now secured with Zero Trust Architecture.
-              </div>
+app.post('/admin/copilot/chat', async (req, res) => {
+    try {
+        const { message } = req.body;
+        const aiResponse = await chatWithCopilot(message);
+        res.status(200).json({ response: aiResponse });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-              {combinedFeed.map((item, index) => {
-                const isMine = item.sender_email === currentUser.email;
-                
-                if (item.type === 'message') {
-                  return (
-                    <div key={`msg-${item.id}-${index}`} className={`flex flex-col max-w-[65%] ${isMine ? 'self-end' : 'self-start'}`}>
-                      {!isMine && selectedContact.email === 'global' && <span className="text-[10px] text-gray-400 ml-1">{item.sender_email}</span>}
-                      <div className={`p-3 rounded-lg shadow ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
-                        <p className="text-sm break-words">{item.content}</p>
-                        <p className="text-[10px] text-gray-400 mt-1 text-right">{new Date(item.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
-                      </div>
-                    </div>
-                  );
-                } else {
-                  return (
-                    <div key={`file-${item.id}`} className={`flex flex-col max-w-[70%] ${isMine ? 'self-end' : 'self-start'}`}>
-                       {!isMine && selectedContact.email === 'global' && <span className="text-[10px] text-gray-400 ml-1">{item.sender_email}</span>}
-                      <div className={`bg-[#202c33] p-4 rounded-lg shadow border border-gray-700 flex flex-col gap-3 ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
-                        <div className="flex items-center gap-3">
-                          <div className="text-blue-400">
-                             <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path></svg>
-                          </div>
-                          <div>
-                            <p className="font-bold text-sm text-blue-400">{item.file_name}</p>
-                            <p className="text-[10px] text-gray-400">Encrypted Transfer</p>
-                          </div>
-                        </div>
-                        
-                        {isMine ? (
-                          <div className="mt-2 text-xs text-green-300 flex items-center justify-end gap-1">
-                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                             Encrypted & Sent
-                          </div>
-                        ) : requestingFileId === item.id ? (
-                          <form onSubmit={(e) => handleDownloadFile(e, item.id)} className="flex items-center gap-2 mt-2">
-                            <input 
-                              type="text" 
-                              placeholder="Enter OTP" 
-                              value={otpInput}
-                              onChange={(e) => setOtpInput(e.target.value)}
-                              maxLength={6}
-                              required
-                              className="bg-[#2a3942] border border-gray-600 focus:outline-none text-center w-24 rounded p-1 text-sm text-white"
-                            />
-                            <button type="submit" className="bg-green-600 px-3 py-1 rounded text-xs font-bold hover:bg-green-700">Unlock</button>
-                          </form>
-                        ) : (
-                          <button 
-                            onClick={() => handleRequestOTP(item.id)}
-                            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-xs font-bold mt-2 text-center w-full"
-                          >
-                            Request OTP to Download
-                          </button>
-                        )}
-                        <p className={`text-[10px] mt-1 ${isMine ? 'text-green-200' : 'text-gray-500'} text-right`}>
-                          {new Date(item.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                }
-              })}
-              <div ref={chatEndRef} />
-            </div>
-
-            <div className="bg-[#202c33] p-4 flex items-center gap-4">
-              <div 
-                className="text-gray-400 hover:text-white cursor-pointer transition-colors"
-                onClick={() => fileUploadInputRef.current?.click()}
-                title="Send Encrypted File"
-              >
-                <svg className="w-6 h-6 transform rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
-              </div>
-              <input type="file" ref={fileUploadInputRef} className="hidden" onChange={handleSendFile} />
-
-              <form onSubmit={handleSendMessage} className="flex-1 flex gap-4">
-                <input 
-                  type="text" 
-                  value={messageInput}
-                  onChange={e => setMessageInput(e.target.value)}
-                  placeholder="Type a message..." 
-                  className="flex-1 bg-[#2a3942] text-white px-4 py-3 rounded-lg focus:outline-none placeholder-gray-400"
-                />
-                <button type="submit" className="bg-[#00a884] hover:bg-[#008f6f] text-white p-3 rounded-full flex items-center justify-center transition-colors">
-                  <svg className="w-5 h-5 ml-1" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"></path></svg>
-                </button>
-              </form>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Zero Trust Backend running on port ${PORT}`));
+module.exports = app;
