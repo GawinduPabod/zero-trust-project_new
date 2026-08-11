@@ -39,6 +39,34 @@ export default function UserDashboard() {
   }, []);
 
   // ==========================================
+  // ZERO TRUST: AUTO SESSION TIMEOUT (5 Mins)
+  // ==========================================
+  useEffect(() => {
+    let timeout: NodeJS.Timeout;
+
+    const resetTimeout = () => {
+      clearTimeout(timeout);
+      // විනාඩි 5ක් (මිලි තත්පර 300,000) කිසිවක් නොකළොත් ලොග් අවුට් වේ
+      timeout = setTimeout(() => {
+        alert("🔒 Zero Trust Security: You have been logged out due to inactivity.");
+        localStorage.removeItem("zeroTrustUser");
+        window.location.href = "/login"; 
+      }, 300000); 
+    };
+
+    // පරිශීලකයාගේ ක්‍රියාකාරකම් නිරීක්ෂණය කිරීම
+    const events = ['mousemove', 'keydown', 'scroll', 'click'];
+    events.forEach(event => window.addEventListener(event, resetTimeout));
+
+    resetTimeout(); // පළමු වරට ක්‍රියාත්මක කිරීම
+
+    return () => {
+      events.forEach(event => window.removeEventListener(event, resetTimeout));
+      clearTimeout(timeout);
+    };
+  }, []);
+
+  // ==========================================
   // SECTION 2: SAFE DATA FETCHING
   // ==========================================
   useEffect(() => {
@@ -147,7 +175,6 @@ export default function UserDashboard() {
     reader.readAsDataURL(file);
   };
 
-  // UPDATED: Added better alert and logic for Request OTP
   const handleRequestOTP = async (fileId: number) => {
     try {
       const res = await fetch("https://zero-trust-project-new.vercel.app/files/request-otp", {
