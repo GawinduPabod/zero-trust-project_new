@@ -21,17 +21,17 @@ export default function UserDashboard() {
   const [requestingFileId, setRequestingFileId] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState("");
   
-  // NEW: Device Verification States
+  // NEW: IP Verification States
   const [deviceWarning, setDeviceWarning] = useState(false);
   const [deviceOtp, setDeviceOtp] = useState("");
-  const [currentDeviceHashStr, setCurrentDeviceHashStr] = useState("");
+  const [currentIpAddress, setCurrentIpAddress] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const profilePicInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
 
   // ==========================================
-  // ZERO TRUST: DEVICE FINGERPRINTING & "IS THIS YOU?" 
+  // ZERO TRUST: IP-BASED VERIFICATION ("IS THIS YOU?")
   // ==========================================
   useEffect(() => {
     const userStr = localStorage.getItem("zeroTrustUser");
@@ -41,27 +41,32 @@ export default function UserDashboard() {
       const parsedUser = JSON.parse(userStr);
       setCurrentUser(parsedUser);
 
-      // 1. උපාංගයේ තොරතුරු (IP, Browser, Screen) ලබාගෙන Hash කිරීම
-      const getDeviceFingerprint = () => {
-        const nav = window.navigator;
-        const screen = window.screen;
-        const rawData = `${nav.userAgent}-${screen.width}x${screen.height}-${screen.colorDepth}-${nav.language}-${Intl.DateTimeFormat().resolvedOptions().timeZone}-${nav.hardwareConcurrency || 'unknown'}`;
-        return CryptoJS.SHA256(rawData).toString();
+      // IP එක පරීක්ෂා කරන Function එක
+      const checkIpChange = async () => {
+        try {
+          // බාහිර API එකක් හරහා පරිශීලකයාගේ සැබෑ IP එක ලබා ගැනීම
+          const res = await fetch("https://api.ipify.org?format=json");
+          const data = await res.json();
+          const currentIp = data.ip;
+          
+          setCurrentIpAddress(currentIp); // අලුත් IP එක State එකේ තියාගන්නවා
+          
+          const savedIp = localStorage.getItem("trustedIpAddress");
+
+          if (!savedIp) {
+            // පළමු වරට ලොග් වන විට IP එක Trusted ලෙස සේව් වේ
+            localStorage.setItem("trustedIpAddress", currentIp);
+          } else if (savedIp !== currentIp) {
+            // IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
+            setDeviceWarning(true);
+            console.log(`Security Alert: "Is this you?" verification email sent to ${parsedUser.email}`);
+          }
+        } catch (error) {
+          console.error("Failed to fetch IP address.");
+        }
       };
 
-      const currentDeviceHash = getDeviceFingerprint();
-      setCurrentDeviceHashStr(currentDeviceHash);
-      const savedDeviceHash = localStorage.getItem("trustedDeviceHash");
-
-      if (!savedDeviceHash) {
-        // පළමු වරට ලොග් වන විට උපාංගය Trusted ලෙස සේව් වේ
-        localStorage.setItem("trustedDeviceHash", currentDeviceHash);
-      } else if (savedDeviceHash !== currentDeviceHash) {
-        // උපාංගය හෝ IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
-        setDeviceWarning(true);
-        // (මෙතනදී සැබෑ පද්ධතියක නම් "Is this you?" ඊමේල් එක සර්වර් එක හරහා යවනු ලැබේ)
-        console.log(`Security Alert: "Is this you?" verification email sent to ${parsedUser.email}`);
-      }
+      checkIpChange();
     }
 
     const timer = setInterval(() => {
@@ -74,7 +79,7 @@ export default function UserDashboard() {
   // ZERO TRUST: AUTO SESSION TIMEOUT (5 Mins)
   // ==========================================
   useEffect(() => {
-    if (deviceWarning) return; // Warning එක තියෙද්දි Time out වෙන්න ඕනේ නෑ
+    if (deviceWarning) return; 
 
     let timeout: NodeJS.Timeout;
     const resetTimeout = () => {
@@ -100,7 +105,7 @@ export default function UserDashboard() {
   // SECTION 2: SAFE DATA FETCHING
   // ==========================================
   useEffect(() => {
-    if (deviceWarning) return; // Block fetching if device is unverified
+    if (deviceWarning) return; 
 
     const fetchUsers = async () => {
       try {
@@ -164,10 +169,9 @@ export default function UserDashboard() {
   // ==========================================
   const handleVerifyDevice = (e: any) => {
     e.preventDefault();
-    // Viva එකට පෙන්වීම සඳහා Demo Verification Code එකක් භාවිත කරමු (උදා: 123456)
     if (deviceOtp === "123456") {
-      alert("✅ Device Verified Successfully! This IP/Device is now trusted.");
-      localStorage.setItem("trustedDeviceHash", currentDeviceHashStr); 
+      alert("✅ Location Verified Successfully! This IP is now trusted.");
+      localStorage.setItem("trustedIpAddress", currentIpAddress); 
       setDeviceWarning(false);
     } else {
       alert("❌ Invalid verification code. Access Denied.");
@@ -280,9 +284,9 @@ export default function UserDashboard() {
       <div className="flex h-screen bg-[#0b141a] text-white items-center justify-center font-sans">
         <div className="bg-[#111b21] p-8 rounded-lg text-center border-t-4 border-red-500 max-w-md shadow-2xl">
           <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-red-500 text-2xl font-bold mb-2">Unrecognized Device / IP</h2>
+          <h2 className="text-red-500 text-2xl font-bold mb-2">Unrecognized Location / IP</h2>
           <p className="mb-6 text-sm text-gray-400">
-            You are trying to access the Zero Trust Workspace from a new location or device. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.
+            You are trying to access the Zero Trust Workspace from a new IP Address. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.
           </p>
           <form onSubmit={handleVerifyDevice}>
             <input 
@@ -295,7 +299,7 @@ export default function UserDashboard() {
               className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none"
             />
             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">
-              Verify & Trust Device
+              Verify & Trust Location
             </button>
           </form>
           <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">
