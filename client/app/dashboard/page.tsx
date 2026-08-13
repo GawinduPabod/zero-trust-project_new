@@ -20,18 +20,50 @@ export default function UserDashboard() {
   const [otpInput, setOtpInput] = useState("");
   const [requestingFileId, setRequestingFileId] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState("");
+  
+  // NEW: Device Verification States
+  const [deviceWarning, setDeviceWarning] = useState(false);
+  const [deviceOtp, setDeviceOtp] = useState("");
+  const [currentDeviceHashStr, setCurrentDeviceHashStr] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const profilePicInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
 
+  // ==========================================
+  // ZERO TRUST: DEVICE FINGERPRINTING & "IS THIS YOU?" 
+  // ==========================================
   useEffect(() => {
     const userStr = localStorage.getItem("zeroTrustUser");
     if (!userStr) {
       router.push("/login");
     } else {
-      setCurrentUser(JSON.parse(userStr));
+      const parsedUser = JSON.parse(userStr);
+      setCurrentUser(parsedUser);
+
+      // 1. උපාංගයේ තොරතුරු (IP, Browser, Screen) ලබාගෙන Hash කිරීම
+      const getDeviceFingerprint = () => {
+        const nav = window.navigator;
+        const screen = window.screen;
+        const rawData = `${nav.userAgent}-${screen.width}x${screen.height}-${screen.colorDepth}-${nav.language}-${Intl.DateTimeFormat().resolvedOptions().timeZone}-${nav.hardwareConcurrency || 'unknown'}`;
+        return CryptoJS.SHA256(rawData).toString();
+      };
+
+      const currentDeviceHash = getDeviceFingerprint();
+      setCurrentDeviceHashStr(currentDeviceHash);
+      const savedDeviceHash = localStorage.getItem("trustedDeviceHash");
+
+      if (!savedDeviceHash) {
+        // පළමු වරට ලොග් වන විට උපාංගය Trusted ලෙස සේව් වේ
+        localStorage.setItem("trustedDeviceHash", currentDeviceHash);
+      } else if (savedDeviceHash !== currentDeviceHash) {
+        // උපාංගය හෝ IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
+        setDeviceWarning(true);
+        // (මෙතනදී සැබෑ පද්ධතියක නම් "Is this you?" ඊමේල් එක සර්වර් එක හරහා යවනු ලැබේ)
+        console.log(`Security Alert: "Is this you?" verification email sent to ${parsedUser.email}`);
+      }
     }
+
     const timer = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString("en-US", { hour12: true, hour: '2-digit', minute:'2-digit', second:'2-digit' }));
     }, 1000);
@@ -42,11 +74,11 @@ export default function UserDashboard() {
   // ZERO TRUST: AUTO SESSION TIMEOUT (5 Mins)
   // ==========================================
   useEffect(() => {
-    let timeout: NodeJS.Timeout;
+    if (deviceWarning) return; // Warning එක තියෙද්දි Time out වෙන්න ඕනේ නෑ
 
+    let timeout: NodeJS.Timeout;
     const resetTimeout = () => {
       clearTimeout(timeout);
-      // විනාඩි 5ක් (මිලි තත්පර 300,000) කිසිවක් නොකළොත් ලොග් අවුට් වේ
       timeout = setTimeout(() => {
         alert("🔒 Zero Trust Security: You have been logged out due to inactivity.");
         localStorage.removeItem("zeroTrustUser");
@@ -54,39 +86,36 @@ export default function UserDashboard() {
       }, 300000); 
     };
 
-    // පරිශීලකයාගේ ක්‍රියාකාරකම් නිරීක්ෂණය කිරීම
     const events = ['mousemove', 'keydown', 'scroll', 'click'];
     events.forEach(event => window.addEventListener(event, resetTimeout));
-
-    resetTimeout(); // පළමු වරට ක්‍රියාත්මක කිරීම
+    resetTimeout(); 
 
     return () => {
       events.forEach(event => window.removeEventListener(event, resetTimeout));
       clearTimeout(timeout);
     };
-  }, []);
+  }, [deviceWarning]);
 
   // ==========================================
   // SECTION 2: SAFE DATA FETCHING
   // ==========================================
   useEffect(() => {
+    if (deviceWarning) return; // Block fetching if device is unverified
+
     const fetchUsers = async () => {
       try {
         const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
         const data = await res.json();
-        if (Array.isArray(data)) {
-          setUsers(data.filter((u: any) => u.email !== currentUser?.email));
-        }
+        if (Array.isArray(data)) setUsers(data.filter((u: any) => u.email !== currentUser?.email));
       } catch (err) {}
     };
     if (currentUser) fetchUsers();
     const userInterval = setInterval(() => { if (currentUser) fetchUsers(); }, 5000);
     return () => clearInterval(userInterval);
-  }, [currentUser]);
+  }, [currentUser, deviceWarning]);
 
   const fetchData = async () => {
-    if (!currentUser || !selectedContact) return;
-    
+    if (!currentUser || !selectedContact || deviceWarning) return;
     try {
       const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -98,8 +127,7 @@ export default function UserDashboard() {
           const decryptedMessages = msgData.map((msg: any) => {
             try {
               const bytes = CryptoJS.AES.decrypt(msg.content, SECRET_KEY);
-              const decryptedText = bytes.toString(CryptoJS.enc.Utf8);
-              msg.content = decryptedText || msg.content; 
+              msg.content = bytes.toString(CryptoJS.enc.Utf8) || msg.content; 
             } catch (e) { msg.content = "[Encrypted Data]"; }
             return { ...msg, type: 'message' };
           });
@@ -115,9 +143,7 @@ export default function UserDashboard() {
       });
       if (fileRes.ok) {
         const fileData = await fileRes.json();
-        if (Array.isArray(fileData)) {
-          setFiles(fileData.map((f:any) => ({...f, type: 'file'})));
-        }
+        if (Array.isArray(fileData)) setFiles(fileData.map((f:any) => ({...f, type: 'file'})));
       }
     } catch (err) {}
   };
@@ -126,7 +152,7 @@ export default function UserDashboard() {
     fetchData();
     const interval = setInterval(fetchData, 3000); 
     return () => clearInterval(interval);
-  }, [selectedContact, currentUser]);
+  }, [selectedContact, currentUser, deviceWarning]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -134,8 +160,20 @@ export default function UserDashboard() {
 
 
   // ==========================================
-  // SECTION 3: USER ACTIONS (MESSAGES & FILES)
+  // SECTION 3: USER ACTIONS
   // ==========================================
+  const handleVerifyDevice = (e: any) => {
+    e.preventDefault();
+    // Viva එකට පෙන්වීම සඳහා Demo Verification Code එකක් භාවිත කරමු (උදා: 123456)
+    if (deviceOtp === "123456") {
+      alert("✅ Device Verified Successfully! This IP/Device is now trusted.");
+      localStorage.setItem("trustedDeviceHash", currentDeviceHashStr); 
+      setDeviceWarning(false);
+    } else {
+      alert("❌ Invalid verification code. Access Denied.");
+    }
+  };
+
   const handleSendMessage = async (e: any) => {
     e.preventDefault();
     if (!messageInput.trim() || !selectedContact) return;
@@ -149,10 +187,7 @@ export default function UserDashboard() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sender_email: currentUser.email, receiver_email: receiver, content: encryptedText }),
       });
-      if (res.ok) {
-        setMessageInput("");
-        fetchData();
-      }
+      if (res.ok) { setMessageInput(""); fetchData(); }
     } catch (err) {}
   };
 
@@ -161,8 +196,7 @@ export default function UserDashboard() {
     if (!file || !selectedContact) return;
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const base64File = event.target?.result as string;
-      const encryptedFile = CryptoJS.AES.encrypt(base64File, SECRET_KEY).toString();
+      const encryptedFile = CryptoJS.AES.encrypt(event.target?.result as string, SECRET_KEY).toString();
       const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
       try {
         const res = await fetch("https://zero-trust-project-new.vercel.app/files/upload", {
@@ -182,12 +216,10 @@ export default function UserDashboard() {
         body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),
       });
       if(res.ok) {
-        alert("OTP sent to your email! (Please check your Inbox and Spam/Junk folder)");
+        alert("OTP sent to your email! (Please check your Inbox)");
         setRequestingFileId(fileId);
-      } else {
-        alert("Failed to send OTP. Server might be busy.");
-      }
-    } catch (err) { alert("Network connection error. Failed to request OTP."); }
+      } else { alert("Failed to send OTP."); }
+    } catch (err) { alert("Network connection error."); }
   };
 
   const handleDownloadFile = async (e: any, fileId: number) => {
@@ -204,8 +236,7 @@ export default function UserDashboard() {
         a.href = bytes.toString(CryptoJS.enc.Utf8);
         a.download = data.file_name;
         a.click();
-        setRequestingFileId(null);
-        setOtpInput("");
+        setRequestingFileId(null); setOtpInput("");
       } else { alert(data.error); }
     } catch (err) { alert("Download failed."); }
   };
@@ -218,17 +249,14 @@ export default function UserDashboard() {
   const handleProfilePicChange = (e: any) => {
     const file = e.target.files[0];
     if (!file || !currentUser) return;
-
     const reader = new FileReader();
     reader.onload = async (event) => {
       const base64Pic = event.target?.result as string;
       try {
         const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),
         });
-        
         if (res.ok) {
           const updatedUser = { ...currentUser, profile_picture: base64Pic };
           setCurrentUser(updatedUser);
@@ -245,7 +273,41 @@ export default function UserDashboard() {
   if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;
 
   // ==========================================
-  // SECTION 4: UI RENDERING
+  // UI RENDERING: SECURITY WARNING SCREEN
+  // ==========================================
+  if (deviceWarning) {
+    return (
+      <div className="flex h-screen bg-[#0b141a] text-white items-center justify-center font-sans">
+        <div className="bg-[#111b21] p-8 rounded-lg text-center border-t-4 border-red-500 max-w-md shadow-2xl">
+          <div className="text-red-500 text-5xl mb-4">⚠️</div>
+          <h2 className="text-red-500 text-2xl font-bold mb-2">Unrecognized Device / IP</h2>
+          <p className="mb-6 text-sm text-gray-400">
+            You are trying to access the Zero Trust Workspace from a new location or device. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.
+          </p>
+          <form onSubmit={handleVerifyDevice}>
+            <input 
+              type="text" 
+              placeholder="Enter 6-Digit Code" 
+              required 
+              maxLength={6}
+              value={deviceOtp}
+              onChange={(e)=>setDeviceOtp(e.target.value)} 
+              className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none"
+            />
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">
+              Verify & Trust Device
+            </button>
+          </form>
+          <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">
+            Cancel and Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // UI RENDERING: NORMAL DASHBOARD
   // ==========================================
   return (
     <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">
@@ -333,7 +395,6 @@ export default function UserDashboard() {
                       <div className={`bg-[#202c33] p-4 rounded-lg shadow border border-gray-700 ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
                         <p className="font-bold text-sm text-blue-400">📎 {item.file_name}</p>
                         
-                        {/* UPDATED: Resend OTP and Cancel Buttons Added */}
                         {isMine ? (
                           <p className="text-xs text-green-300 mt-2">Encrypted & Sent</p>
                         ) : requestingFileId === item.id ? (
@@ -350,7 +411,6 @@ export default function UserDashboard() {
                         ) : (
                           <button onClick={() => handleRequestOTP(item.id)} className="bg-blue-600 hover:bg-blue-500 transition-colors px-4 py-2 rounded text-xs font-bold mt-2 w-full text-center">Request OTP to Download</button>
                         )}
-
                       </div>
                     </div>
                   );
