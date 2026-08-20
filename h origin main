@@ -1,0 +1,486 @@
+[1mdiff --git a/client/app/dashboard/page.tsx b/client/app/dashboard/page.tsx[m
+[1mindex dd12fc1..2c73ea8 100644[m
+[1m--- a/client/app/dashboard/page.tsx[m
+[1m+++ b/client/app/dashboard/page.tsx[m
+[36m@@ -20,18 +20,55 @@[m [mexport default function UserDashboard() {[m
+   const [otpInput, setOtpInput] = useState("");[m
+   const [requestingFileId, setRequestingFileId] = useState<number | null>(null);[m
+   const [currentTime, setCurrentTime] = useState("");[m
+[32m+[m[41m  [m
+[32m+[m[32m  // NEW: IP Verification States[m
+[32m+[m[32m  const [deviceWarning, setDeviceWarning] = useState(false);[m
+[32m+[m[32m  const [deviceOtp, setDeviceOtp] = useState("");[m
+[32m+[m[32m  const [currentIpAddress, setCurrentIpAddress] = useState("");[m
+ [m
+   const chatEndRef = useRef<HTMLDivElement>(null);[m
+   const profilePicInputRef = useRef<HTMLInputElement>(null);[m
+   const fileUploadInputRef = useRef<HTMLInputElement>(null);[m
+ [m
+[32m+[m[32m  // ==========================================[m
+[32m+[m[32m  // ZERO TRUST: IP-BASED VERIFICATION ("IS THIS YOU?")[m
+[32m+[m[32m  // ==========================================[m
+   useEffect(() => {[m
+     const userStr = localStorage.getItem("zeroTrustUser");[m
+     if (!userStr) {[m
+       router.push("/login");[m
+     } else {[m
+[31m-      setCurrentUser(JSON.parse(userStr));[m
+[32m+[m[32m      const parsedUser = JSON.parse(userStr);[m
+[32m+[m[32m      setCurrentUser(parsedUser);[m
+[32m+[m
+[32m+[m[32m      // IP එක පරීක්ෂා කරන Function එක[m
+[32m+[m[32m      const checkIpChange = async () => {[m
+[32m+[m[32m        try {[m
+[32m+[m[32m          // බාහිර API එකක් හරහා පරිශීලකයාගේ සැබෑ IP එක ලබා ගැනීම[m
+[32m+[m[32m          const res = await fetch("https://api.ipify.org?format=json");[m
+[32m+[m[32m          const data = await res.json();[m
+[32m+[m[32m          const currentIp = data.ip;[m
+[32m+[m[41m          [m
+[32m+[m[32m          setCurrentIpAddress(currentIp); // අලුත් IP එක State එකේ තියාගන්නවා[m
+[32m+[m[41m          [m
+[32m+[m[32m          const savedIp = localStorage.getItem("trustedIpAddress");[m
+[32m+[m
+[32m+[m[32m          if (!savedIp) {[m
+[32m+[m[32m            // පළමු වරට ලොග් වන විට IP එක Trusted ලෙස සේව් වේ[m
+[32m+[m[32m            localStorage.setItem("trustedIpAddress", currentIp);[m
+[32m+[m[32m          } else if (savedIp !== currentIp) {[m
+[32m+[m[32m            // IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම[m
+[32m+[m[32m            setDeviceWarning(true);[m
+[32m+[m[32m            console.log(`Security Alert: "Is this you?" verification email sent to ${parsedUser.email}`);[m
+[32m+[m[32m          }[m
+[32m+[m[32m        } catch (error) {[m
+[32m+[m[32m          console.error("Failed to fetch IP address.");[m
+[32m+[m[32m        }[m
+[32m+[m[32m      };[m
+[32m+[m
+[32m+[m[32m      checkIpChange();[m
+     }[m
+[32m+[m
+     const timer = setInterval(() => {[m
+       setCurrentTime(new Date().toLocaleTimeString("en-US", { hour12: true, hour: '2-digit', minute:'2-digit', second:'2-digit' }));[m
+     }, 1000);[m
+[36m@@ -42,11 +79,11 @@[m [mexport default function UserDashboard() {[m
+   // ZERO TRUST: AUTO SESSION TIMEOUT (5 Mins)[m
+   // ==========================================[m
+   useEffect(() => {[m
+[31m-    let timeout: NodeJS.Timeout;[m
+[32m+[m[32m    if (deviceWarning) return;[m[41m [m
+ [m
+[32m+[m[32m    let timeout: NodeJS.Timeout;[m
+     const resetTimeout = () => {[m
+       clearTimeout(timeout);[m
+[31m-      // විනාඩි 5ක් (මිලි තත්පර 300,000) කිසිවක් නොකළොත් ලොග් අවුට් වේ[m
+       timeout = setTimeout(() => {[m
+         alert("🔒 Zero Trust Security: You have been logged out due to inactivity.");[m
+         localStorage.removeItem("zeroTrustUser");[m
+[36m@@ -54,39 +91,36 @@[m [mexport default function UserDashboard() {[m
+       }, 300000); [m
+     };[m
+ [m
+[31m-    // පරිශීලකයාගේ ක්‍රියාකාරකම් නිරීක්ෂණය කිරීම[m
+     const events = ['mousemove', 'keydown', 'scroll', 'click'];[m
+     events.forEach(event => window.addEventListener(event, resetTimeout));[m
+[31m-[m
+[31m-    resetTimeout(); // පළමු වරට ක්‍රියාත්මක කිරීම[m
+[32m+[m[32m    resetTimeout();[m[41m [m
+ [m
+     return () => {[m
+       events.forEach(event => window.removeEventListener(event, resetTimeout));[m
+       clearTimeout(timeout);[m
+     };[m
+[31m-  }, []);[m
+[32m+[m[32m  }, [deviceWarning]);[m
+ [m
+   // ==========================================[m
+   // SECTION 2: SAFE DATA FETCHING[m
+   // ==========================================[m
+   useEffect(() => {[m
+[32m+[m[32m    if (deviceWarning) return;[m[41m [m
+[32m+[m
+     const fetchUsers = async () => {[m
+       try {[m
+         const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");[m
+         const data = await res.json();[m
+[31m-        if (Array.isArray(data)) {[m
+[31m-          setUsers(data.filter((u: any) => u.email !== currentUser?.email));[m
+[31m-        }[m
+[32m+[m[32m        if (Array.isArray(data)) setUsers(data.filter((u: any) => u.email !== currentUser?.email));[m
+       } catch (err) {}[m
+     };[m
+     if (currentUser) fetchUsers();[m
+     const userInterval = setInterval(() => { if (currentUser) fetchUsers(); }, 5000);[m
+     return () => clearInterval(userInterval);[m
+[31m-  }, [currentUser]);[m
+[32m+[m[32m  }, [currentUser, deviceWarning]);[m
+ [m
+   const fetchData = async () => {[m
+[31m-    if (!currentUser || !selectedContact) return;[m
+[31m-    [m
+[32m+[m[32m    if (!currentUser || !selectedContact || deviceWarning) return;[m
+     try {[m
+       const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {[m
+         method: "POST", headers: { "Content-Type": "application/json" },[m
+[36m@@ -98,8 +132,7 @@[m [mexport default function UserDashboard() {[m
+           const decryptedMessages = msgData.map((msg: any) => {[m
+             try {[m
+               const bytes = CryptoJS.AES.decrypt(msg.content, SECRET_KEY);[m
+[31m-              const decryptedText = bytes.toString(CryptoJS.enc.Utf8);[m
+[31m-              msg.content = decryptedText || msg.content; [m
+[32m+[m[32m              msg.content = bytes.toString(CryptoJS.enc.Utf8) || msg.content;[m[41m [m
+             } catch (e) { msg.content = "[Encrypted Data]"; }[m
+             return { ...msg, type: 'message' };[m
+           });[m
+[36m@@ -115,9 +148,7 @@[m [mexport default function UserDashboard() {[m
+       });[m
+       if (fileRes.ok) {[m
+         const fileData = await fileRes.json();[m
+[31m-        if (Array.isArray(fileData)) {[m
+[31m-          setFiles(fileData.map((f:any) => ({...f, type: 'file'})));[m
+[31m-        }[m
+[32m+[m[32m        if (Array.isArray(fileData)) setFiles(fileData.map((f:any) => ({...f, type: 'file'})));[m
+       }[m
+     } catch (err) {}[m
+   };[m
+[36m@@ -126,7 +157,7 @@[m [mexport default function UserDashboard() {[m
+     fetchData();[m
+     const interval = setInterval(fetchData, 3000); [m
+     return () => clearInterval(interval);[m
+[31m-  }, [selectedContact, currentUser]);[m
+[32m+[m[32m  }, [selectedContact, currentUser, deviceWarning]);[m
+ [m
+   useEffect(() => {[m
+     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });[m
+[36m@@ -134,8 +165,19 @@[m [mexport default function UserDashboard() {[m
+ [m
+ [m
+   // ==========================================[m
+[31m-  // SECTION 3: USER ACTIONS (MESSAGES & FILES)[m
+[32m+[m[32m  // SECTION 3: USER ACTIONS[m
+   // ==========================================[m
+[32m+[m[32m  const handleVerifyDevice = (e: any) => {[m
+[32m+[m[32m    e.preventDefault();[m
+[32m+[m[32m    if (deviceOtp === "123456") {[m
+[32m+[m[32m      alert("✅ Location Verified Successfully! This IP is now trusted.");[m
+[32m+[m[32m      localStorage.setItem("trustedIpAddress", currentIpAddress);[m[41m [m
+[32m+[m[32m      setDeviceWarning(false);[m
+[32m+[m[32m    } else {[m
+[32m+[m[32m      alert("❌ Invalid verification code. Access Denied.");[m
+[32m+[m[32m    }[m
+[32m+[m[32m  };[m
+[32m+[m
+   const handleSendMessage = async (e: any) => {[m
+     e.preventDefault();[m
+     if (!messageInput.trim() || !selectedContact) return;[m
+[36m@@ -149,10 +191,7 @@[m [mexport default function UserDashboard() {[m
+         method: "POST", headers: { "Content-Type": "application/json" },[m
+         body: JSON.stringify({ sender_email: currentUser.email, receiver_email: receiver, content: encryptedText }),[m
+       });[m
+[31m-      if (res.ok) {[m
+[31m-        setMessageInput("");[m
+[31m-        fetchData();[m
+[31m-      }[m
+[32m+[m[32m      if (res.ok) { setMessageInput(""); fetchData(); }[m
+     } catch (err) {}[m
+   };[m
+ [m
+[36m@@ -161,8 +200,7 @@[m [mexport default function UserDashboard() {[m
+     if (!file || !selectedContact) return;[m
+     const reader = new FileReader();[m
+     reader.onload = async (event) => {[m
+[31m-      const base64File = event.target?.result as string;[m
+[31m-      const encryptedFile = CryptoJS.AES.encrypt(base64File, SECRET_KEY).toString();[m
+[32m+[m[32m      const encryptedFile = CryptoJS.AES.encrypt(event.target?.result as string, SECRET_KEY).toString();[m
+       const receiver = selectedContact.email === 'global' ? null : selectedContact.email;[m
+       try {[m
+         const res = await fetch("https://zero-trust-project-new.vercel.app/files/upload", {[m
+[36m@@ -182,12 +220,10 @@[m [mexport default function UserDashboard() {[m
+         body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),[m
+       });[m
+       if(res.ok) {[m
+[31m-        alert("OTP sent to your email! (Please check your Inbox and Spam/Junk folder)");[m
+[32m+[m[32m        alert("OTP sent to your email! (Please check your Inbox)");[m
+         setRequestingFileId(fileId);[m
+[31m-      } else {[m
+[31m-        alert("Failed to send OTP. Server might be busy.");[m
+[31m-      }[m
+[31m-    } catch (err) { alert("Network connection error. Failed to request OTP."); }[m
+[32m+[m[32m      } else { alert("Failed to send OTP."); }[m
+[32m+[m[32m    } catch (err) { alert("Network connection error."); }[m
+   };[m
+ [m
+   const handleDownloadFile = async (e: any, fileId: number) => {[m
+[36m@@ -204,8 +240,7 @@[m [mexport default function UserDashboard() {[m
+         a.href = bytes.toString(CryptoJS.enc.Utf8);[m
+         a.download = data.file_name;[m
+         a.click();[m
+[31m-        setRequestingFileId(null);[m
+[31m-        setOtpInput("");[m
+[32m+[m[32m        setRequestingFileId(null); setOtpInput("");[m
+       } else { alert(data.error); }[m
+     } catch (err) { alert("Download failed."); }[m
+   };[m
+[36m@@ -218,17 +253,14 @@[m [mexport default function UserDashboard() {[m
+   const handleProfilePicChange = (e: any) => {[m
+     const file = e.target.files[0];[m
+     if (!file || !currentUser) return;[m
+[31m-[m
+     const reader = new FileReader();[m
+     reader.onload = async (event) => {[m
+       const base64Pic = event.target?.result as string;[m
+       try {[m
+         const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {[m
+[31m-          method: "POST",[m
+[31m-          headers: { "Content-Type": "application/json" },[m
+[32m+[m[32m          method: "POST", headers: { "Content-Type": "application/json" },[m
+           body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),[m
+         });[m
+[31m-        [m
+         if (res.ok) {[m
+           const updatedUser = { ...currentUser, profile_picture: base64Pic };[m
+           setCurrentUser(updatedUser);[m
+[36m@@ -245,7 +277,41 @@[m [mexport default function UserDashboard() {[m
+   if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;[m
+ [m
+   // ==========================================[m
+[31m-  // SECTION 4: UI RENDERING[m
+[32m+[m[32m  // UI RENDERING: SECURITY WARNING SCREEN[m
+[32m+[m[32m  // ==========================================[m
+[32m+[m[32m  if (deviceWarning) {[m
+[32m+[m[32m    return ([m
+[32m+[m[32m      <div className="flex h-screen bg-[#0b141a] text-white items-center justify-center font-sans">[m
+[32m+[m[32m        <div className="bg-[#111b21] p-8 rounded-lg text-center border-t-4 border-red-500 max-w-md shadow-2xl">[m
+[32m+[m[32m          <div className="text-red-500 text-5xl mb-4">⚠️</div>[m
+[32m+[m[32m          <h2 className="text-red-500 text-2xl font-bold mb-2">Unrecognized Location / IP</h2>[m
+[32m+[m[32m          <p className="mb-6 text-sm text-gray-400">[m
+[32m+[m[32m            You are trying to access the Zero Trust Workspace from a new IP Address. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.[m
+[32m+[m[32m          </p>[m
+[32m+[m[32m          <form onSubmit={handleVerifyDevice}>[m
+[32m+[m[32m            <input[m[41m [m
+[32m+[m[32m              type="text"[m[41m [m
+[32m+[m[32m              placeholder="Enter 6-Digit Code"[m[41m [m
+[32m+[m[32m              required[m[41m [m
+[32m+[m[32m              maxLength={6}[m
+[32m+[m[32m              value={deviceOtp}[m
+[32m+[m[32m              onChange={(e)=>setDeviceOtp(e.target.value)}[m[41m [m
+[32m+[m[32m              className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none"[m
+[32m+[m[32m            />[m
+[32m+[m[32m            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">[m
+[32m+[m[32m              Verify & Trust Location[m
+[32m+[m[32m            </button>[m
+[32m+[m[32m          </form>[m
+[32m+[m[32m          <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">[m
+[32m+[m[32m            Cancel and Logout[m
+[32m+[m[32m          </button>[m
+[32m+[m[32m        </div>[m
+[32m+[m[32m      </div>[m
+[32m+[m[32m    );[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // ==========================================[m
+[32m+[m[32m  // UI RENDERING: NORMAL DASHBOARD[m
+   // ==========================================[m
+   return ([m
+     <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">[m
+[36m@@ -333,7 +399,6 @@[m [mexport default function UserDashboard() {[m
+                       <div className={`bg-[#202c33] p-4 rounded-lg shadow border border-gray-700 ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>[m
+                         <p className="font-bold text-sm text-blue-400">📎 {item.file_name}</p>[m
+                         [m
+[31m-                        {/* UPDATED: Resend OTP and Cancel Buttons Added */}[m
+                         {isMine ? ([m
+                           <p className="text-xs text-green-300 mt-2">Encrypted & Sent</p>[m
+                         ) : requestingFileId === item.id ? ([m
+[36m@@ -350,7 +415,6 @@[m [mexport default function UserDashboard() {[m
+                         ) : ([m
+                           <button onClick={() => handleRequestOTP(item.id)} className="bg-blue-600 hover:bg-blue-500 transition-colors px-4 py-2 rounded text-xs font-bold mt-2 w-full text-center">Request OTP to Download</button>[m
+                         )}[m
+[31m-[m
+                       </div>[m
+                     </div>[m
+                   );[m
+[1mdiff --git a/client/app/login/page.tsx b/client/app/login/page.tsx[m
+[1mindex cbe3dda..e5ff684 100644[m
+[1m--- a/client/app/login/page.tsx[m
+[1m+++ b/client/app/login/page.tsx[m
+[36m@@ -1,4 +1,64 @@[m
+[31m-// Step 2 handle kireema: OTP eka verify karala redirect kireema[m
+[32m+[m[32m"use client";[m
+[32m+[m[32mimport { useState } from "react";[m
+[32m+[m[32mimport { useRouter } from "next/navigation";[m
+[32m+[m[32mimport Link from "next/link";[m
+[32m+[m
+[32m+[m[32mexport default function LoginPage() {[m
+[32m+[m[32m  const [username, setUsername] = useState("");[m
+[32m+[m[32m  const [email, setEmail] = useState("");[m
+[32m+[m[32m  const [otp, setOtp] = useState("");[m
+[32m+[m[32m  const [step, setStep] = useState(1);[m
+[32m+[m[32m  const [message, setMessage] = useState("");[m
+[32m+[m[32m  const router = useRouter();[m
+[32m+[m
+[32m+[m[32m  //// Handle Step 1: Send Login Request & Generate OTP (With Location)[m
+[32m+[m[32m  const handleLogin = async (e: any) => {[m
+[32m+[m[32m    e.preventDefault();[m
+[32m+[m[32m    setMessage("Requesting location access... Please wait.");[m
+[32m+[m
+[32m+[m[32m    // Function to send data to backend[m
+[32m+[m[32m    const sendLoginData = async (userLocation: string) => {[m
+[32m+[m[32m      setMessage("Sending OTP... Please wait.");[m
+[32m+[m[32m      try {[m
+[32m+[m[32m        const res = await fetch("https://zero-trust-project-new.vercel.app/login", {[m
+[32m+[m[32m          method: "POST",[m
+[32m+[m[32m          headers: { "Content-Type": "application/json" },[m
+[32m+[m[32m          body: JSON.stringify({ username, email, location: userLocation }), // ලොකේෂන් එක මෙතනින් යවනවා[m
+[32m+[m[32m        });[m
+[32m+[m
+[32m+[m[32m        const data = await res.json();[m
+[32m+[m[32m        if (res.ok) {[m
+[32m+[m[32m          setMessage(data.message);[m
+[32m+[m[32m          setOtp("");[m
+[32m+[m[32m          setStep(2);[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m          setMessage(data.error);[m
+[32m+[m[32m        }[m
+[32m+[m[32m      } catch (error) {[m
+[32m+[m[32m        setMessage("Cannot connect to the server.");[m
+[32m+[m[32m      }[m
+[32m+[m[32m    };[m
+[32m+[m
+[32m+[m[32m    // Asking for Browser Geolocation[m
+[32m+[m[32m    if ("geolocation" in navigator) {[m
+[32m+[m[32m      navigator.geolocation.getCurrentPosition([m
+[32m+[m[32m        async (position) => {[m
+[32m+[m[32m          // Access Granted[m
+[32m+[m[32m          const locationString = `Lat: ${position.coords.latitude}, Lng: ${position.coords.longitude}`;[m
+[32m+[m[32m          await sendLoginData(locationString);[m
+[32m+[m[32m        },[m
+[32m+[m[32m        async (error) => {[m
+[32m+[m[32m          // Access Denied by User[m
+[32m+[m[32m          setMessage("Location access denied. Notifying Security Admin...");[m
+[32m+[m[32m          await sendLoginData("Location Denied");[m
+[32m+[m[32m        }[m
+[32m+[m[32m      );[m
+[32m+[m[32m    } else {[m
+[32m+[m[32m      await sendLoginData("Geolocation not supported");[m
+[32m+[m[32m    }[m
+[32m+[m[32m  };[m
+[32m+[m
+[32m+[m[32m  //// Handle Step 2: Verify OTP and Redirect[m
+   const handleVerifyOtp = async (e: any) => {[m
+     e.preventDefault();[m
+     setMessage("Verifying OTP...");[m
+[36m@@ -13,22 +73,91 @@[m
+       const data = await res.json();[m
+       if (res.ok) {[m
+         setMessage("Login successful! Redirecting...");[m
+[31m-        [m
+[31m-        const safeEmail = email.trim().toLowerCase();[m
+[31m-        [m
+[31m-        localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: safeEmail, token: data.token }));[m
+[31m-        [m
+[31m-        // SMART ROUTING: Email eke "admin" kiyala thiyenawada kiyala check karanawa[m
+[31m-        if (safeEmail.includes("admin")) {[m
+[31m-          window.location.href = "/admin"; [m
+[31m-        } else {[m
+[31m-          window.location.href = "/dashboard"; [m
+[31m-        }[m
+[31m-[m
+[32m+[m[32m        localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: email, token: data.token }));[m
+[32m+[m[32m        router.push("/dashboard");[m
+       } else {[m
+         setMessage(data.error);[m
+       }[m
+     } catch (error) {[m
+       setMessage("Cannot connect to the server.");[m
+     }[m
+[31m-  };[m
+\ No newline at end of file[m
+[32m+[m[32m  };[m
+[32m+[m
+[32m+[m[32m  return ([m
+[32m+[m[32m    <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">[m
+[32m+[m[32m      <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-96">[m
+[32m+[m[32m        <h2 className="text-2xl font-bold mb-6 text-center text-blue-400">[m
+[32m+[m[32m          Zero Trust Workspace[m
+[32m+[m[32m        </h2>[m
+[32m+[m[32m        <h3 className="text-lg mb-4 text-center">Login</h3>[m
+[32m+[m
+[32m+[m[32m        {step === 1 ? ([m
+[32m+[m[32m          <form onSubmit={handleLogin} className="flex flex-col gap-4">[m
+[32m+[m[32m            <input[m
+[32m+[m[32m              type="text"[m
+[32m+[m[32m              placeholder="Username"[m
+[32m+[m[32m              required[m
+[32m+[m[32m              className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-400"[m
+[32m+[m[32m              onChange={(e) => setUsername(e.target.value)}[m
+[32m+[m[32m            />[m
+[32m+[m[32m            <input[m
+[32m+[m[32m              type="email"[m
+[32m+[m[32m              placeholder="Email Address"[m
+[32m+[m[32m              required[m
+[32m+[m[32m              className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-400"[m
+[32m+[m[32m              onChange={(e) => setEmail(e.target.value)}[m
+[32m+[m[32m            />[m
+[32m+[m[32m            <button[m
+[32m+[m[32m              type="submit"[m
+[32m+[m[32m              className="bg-blue-600 hover:bg-blue-700 font-bold py-2 px-4 rounded mt-4 transition-colors"[m
+[32m+[m[32m            >[m
+[32m+[m[32m              Send OTP[m
+[32m+[m[32m            </button>[m
+[32m+[m
+[32m+[m[32m            {/* Register Link Added Here */}[m
+[32m+[m[32m            <div className="mt-4 text-center">[m
+[32m+[m[32m              <p className="text-sm text-gray-400">[m
+[32m+[m[32m                Don't have an account?{" "}[m
+[32m+[m[32m                <Link[m
+[32m+[m[32m                  href="/register"[m
+[32m+[m[32m                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"[m
+[32m+[m[32m                >[m
+[32m+[m[32m                  Register Here[m
+[32m+[m[32m                </Link>[m
+[32m+[m[32m              </p>[m
+[32m+[m[32m            </div>[m
+[32m+[m[32m          </form>[m
+[32m+[m[32m        ) : ([m
+[32m+[m[32m          <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">[m
+[32m+[m[32m            <p className="text-sm text-gray-400 text-center mb-2">[m
+[32m+[m[32m              Please check your email ({email}) for the OTP.[m
+[32m+[m[32m            </p>[m
+[32m+[m[32m            <input[m
+[32m+[m[32m              type="text"[m
+[32m+[m[32m              name="secure-otp-code"[m
+[32m+[m[32m              id="secure-otp-code"[m
+[32m+[m[32m              autoComplete="off"[m
+[32m+[m[32m              placeholder="Enter 6-digit OTP"[m
+[32m+[m[32m              required[m
+[32m+[m[32m              maxLength={6}[m
+[32m+[m[32m              value={otp}[m
+[32m+[m[32m              className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-400 text-center tracking-widest text-xl"[m
+[32m+[m[32m              onChange={(e) => setOtp(e.target.value)}[m
+[32m+[m[32m            />[m
+[32m+[m[32m            <button[m
+[32m+[m[32m              type="submit"[m
+[32m+[m[32m              className="bg-green-600 hover:bg-green-700 font-bold py-2 px-4 rounded mt-4 transition-colors"[m
+[32m+[m[32m            >[m
+[32m+[m[32m              Verify OTP[m
+[32m+[m[32m            </button>[m
+[32m+[m[32m          </form>[m
+[32m+[m[32m        )}[m
+[32m+[m
+[32m+[m[32m        {/* Display Messages */}[m
+[32m+[m[32m        {message && ([m
+[32m+[m[32m          <p className="mt-4 text-center text-sm text-yellow-300">{message}</p>[m
+[32m+[m[32m        )}[m
+[32m+[m[32m      </div>[m
+[32m+[m[32m    </div>[m
+[32m+[m[32m  );[m
+[32m+[m[32m}[m
+\ No newline at end of file[m
+[1mdiff --git a/client/next.config.ts b/client/next.config.ts[m
+[1mindex a7366da..e9ffa30 100644[m
+[1m--- a/client/next.config.ts[m
+[1m+++ b/client/next.config.ts[m
+[36m@@ -1,5 +1,3 @@[m
+[31m-next config.ts [m
+[31m-[m
+ import type { NextConfig } from "next";[m
+ [m
+ const nextConfig: NextConfig = {[m
