@@ -23,7 +23,7 @@ export default function LoginPage() {
         const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, email, location: userLocation }), // ලොකේෂන් එක මෙතනින් යවනවා
+          body: JSON.stringify({ username, email, location: userLocation }), 
         });
 
         const data = await res.json();
@@ -73,8 +73,17 @@ export default function LoginPage() {
       const data = await res.json();
       if (res.ok) {
         setMessage("Login successful! Redirecting...");
-        localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: email, token: data.token }));
-        router.push("/dashboard");
+        
+        // SMART ROUTING: Admin email check and redirect
+        const safeEmail = email.trim().toLowerCase();
+        localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: safeEmail, token: data.token }));
+        
+        if (safeEmail.includes("admin")) {
+          window.location.href = "/admin"; 
+        } else {
+          window.location.href = "/dashboard"; 
+        }
+
       } else {
         setMessage(data.error);
       }

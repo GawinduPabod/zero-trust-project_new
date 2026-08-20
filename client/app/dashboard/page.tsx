@@ -58,8 +58,10 @@ export default function UserDashboard() {
             localStorage.setItem("trustedIpAddress", currentIp);
           } else if (savedIp !== currentIp) {
             // IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
-            setDeviceWarning(true);
-            console.log(`Security Alert: "Is this you?" verification email sent to ${parsedUser.email}`);
+            
+            // BYPASS KALA: true wenuwata false damma. Dan kavadavath popup eka enne naha!
+            setDeviceWarning(false); 
+            console.log(`Security Alert Bypassed for ${parsedUser.email}`);
           }
         } catch (error) {
           console.error("Failed to fetch IP address.");
