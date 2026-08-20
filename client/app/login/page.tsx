@@ -16,7 +16,6 @@ export default function LoginPage() {
     e.preventDefault();
     setMessage("Requesting location access... Please wait.");
 
-    // Function to send data to backend
     const sendLoginData = async (userLocation: string) => {
       setMessage("Sending OTP... Please wait.");
       try {
@@ -39,22 +38,41 @@ export default function LoginPage() {
       }
     };
 
-    // Asking for Browser Geolocation
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
-          // Access Granted
           const locationString = `Lat: ${position.coords.latitude}, Lng: ${position.coords.longitude}`;
           await sendLoginData(locationString);
         },
         async (error) => {
-          // Access Denied by User
           setMessage("Location access denied. Notifying Security Admin...");
           await sendLoginData("Location Denied");
         }
       );
     } else {
       await sendLoginData("Geolocation not supported");
+    }
+  };
+
+  //// NEW: Handle Resend OTP Request
+  const handleResendOtp = async () => {
+    setMessage("Resending new OTP... Please wait.");
+    try {
+      const res = await fetch("https://zero-trust-project-new.vercel.app/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Api kalin enter karapu username saha email ekama aye yawanawa
+        body: JSON.stringify({ username, email, location: "Resend Request" }), 
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setMessage("New OTP sent successfully! Check your email.");
+      } else {
+        setMessage(data.error);
+      }
+    } catch (error) {
+      setMessage("Cannot connect to the server.");
     }
   };
 
@@ -74,10 +92,10 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login successful! Redirecting...");
         
-        // SMART ROUTING: Admin email check and redirect
         const safeEmail = email.trim().toLowerCase();
         localStorage.setItem("zeroTrustUser", JSON.stringify({ username: username, email: safeEmail, token: data.token }));
         
+        // SMART ROUTING
         if (safeEmail.includes("admin")) {
           window.location.href = "/admin"; 
         } else {
@@ -123,7 +141,6 @@ export default function LoginPage() {
               Send OTP
             </button>
 
-            {/* Register Link Added Here */}
             <div className="mt-4 text-center">
               <p className="text-sm text-gray-400">
                 Don't have an account?{" "}
@@ -155,9 +172,18 @@ export default function LoginPage() {
             />
             <button
               type="submit"
-              className="bg-green-600 hover:bg-green-700 font-bold py-2 px-4 rounded mt-4 transition-colors"
+              className="bg-green-600 hover:bg-green-700 font-bold py-2 px-4 rounded mt-2 transition-colors"
             >
               Verify OTP
+            </button>
+            
+            {/* NEW: Resend OTP Button */}
+            <button
+              type="button"
+              onClick={handleResendOtp}
+              className="text-blue-400 hover:text-blue-300 text-sm font-medium underline mt-1 transition-colors"
+            >
+              Didn't receive code? Resend OTP
             </button>
           </form>
         )}
