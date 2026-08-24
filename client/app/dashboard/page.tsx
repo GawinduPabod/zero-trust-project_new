@@ -1,3 +1,5 @@
+dashboard 
+
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -21,6 +23,7 @@ export default function UserDashboard() {
   const [requestingFileId, setRequestingFileId] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState("");
   
+  // NEW: IP Verification States
   const [deviceWarning, setDeviceWarning] = useState(false);
   const [deviceOtp, setDeviceOtp] = useState("");
   const [currentIpAddress, setCurrentIpAddress] = useState("");
@@ -40,21 +43,27 @@ export default function UserDashboard() {
       const parsedUser = JSON.parse(userStr);
       setCurrentUser(parsedUser);
 
+      // IP එක පරීක්ෂා කරන Function එක
       const checkIpChange = async () => {
         try {
+          // බාහිර API එකක් හරහා පරිශීලකයාගේ සැබෑ IP එක ලබා ගැනීම
           const res = await fetch("https://api.ipify.org?format=json");
           const data = await res.json();
           const currentIp = data.ip;
           
-          setCurrentIpAddress(currentIp); 
+          setCurrentIpAddress(currentIp); // අලුත් IP එක State එකේ තියාගන්නවා
           
           const savedIp = localStorage.getItem("trustedIpAddress");
 
           if (!savedIp) {
+            // පළමු වරට ලොග් වන විට IP එක Trusted ලෙස සේව් වේ
             localStorage.setItem("trustedIpAddress", currentIp);
           } else if (savedIp !== currentIp) {
-            // BYPASSED
+            // IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
+            
+            // BYPASS KALA: true wenuwata false damma. Dan kavadavath popup eka enne naha!
             setDeviceWarning(false); 
+            console.log(`Security Alert Bypassed for ${parsedUser.email}`);
           }
         } catch (error) {
           console.error("Failed to fetch IP address.");
@@ -106,10 +115,7 @@ export default function UserDashboard() {
       try {
         const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
         const data = await res.json();
-        // FIX: Admin wa users list eken ain kala (mokada admin ta wenama button ekak udata dapu nisa)
-        if (Array.isArray(data)) {
-            setUsers(data.filter((u: any) => u.email !== currentUser?.email && u.email !== 'zerotrust.admin@gmail.com'));
-        }
+        if (Array.isArray(data)) setUsers(data.filter((u: any) => u.email !== currentUser?.email));
       } catch (err) {}
     };
     if (currentUser) fetchUsers();
@@ -179,8 +185,8 @@ export default function UserDashboard() {
   const handleSendMessage = async (e: any) => {
     e.preventDefault();
     if (!messageInput.trim() || !selectedContact) return;
-    
-    // FIX: AI alert eka ain kala mokada dan katha karanne Human Admin ekka
+    if (selectedContact.email === 'ai_admin') alert("Security AI is offline. Messages are stored.");
+
     const encryptedText = CryptoJS.AES.encrypt(messageInput, SECRET_KEY).toString();
     const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
 
@@ -274,6 +280,9 @@ export default function UserDashboard() {
 
   if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;
 
+  // ==========================================
+  // UI RENDERING: SECURITY WARNING SCREEN
+  // ==========================================
   if (deviceWarning) {
     return (
       <div className="flex h-screen bg-[#0b141a] text-white items-center justify-center font-sans">
@@ -284,23 +293,47 @@ export default function UserDashboard() {
             You are trying to access the Zero Trust Workspace from a new IP Address. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.
           </p>
           <form onSubmit={handleVerifyDevice}>
-            <input type="text" placeholder="Enter 6-Digit Code" required maxLength={6} value={deviceOtp} onChange={(e)=>setDeviceOtp(e.target.value)} className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none" />
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">Verify & Trust Location</button>
+            <input 
+              type="text" 
+              placeholder="Enter 6-Digit Code" 
+              required 
+              maxLength={6}
+              value={deviceOtp}
+              onChange={(e)=>setDeviceOtp(e.target.value)} 
+              className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none"
+            />
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">
+              Verify & Trust Location
+            </button>
           </form>
-          <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">Cancel and Logout</button>
+          <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">
+            Cancel and Logout
+          </button>
         </div>
       </div>
     );
   }
 
+  // ==========================================
+  // UI RENDERING: NORMAL DASHBOARD
+  // ==========================================
   return (
     <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">
+      
       {/* LEFT SIDEBAR */}
       <div className="w-1/3 max-w-[400px] border-r border-[#202c33] flex flex-col bg-[#111b21]">
         <div className="bg-[#202c33] p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gray-600 overflow-hidden flex items-center justify-center text-xl font-bold cursor-pointer hover:opacity-80" onClick={() => profilePicInputRef.current?.click()} title="Click to change Profile Picture">
-              {currentUser.profile_picture ? <img src={currentUser.profile_picture} alt="DP" className="w-full h-full object-cover" /> : currentUser.username.charAt(0).toUpperCase()}
+            <div 
+              className="w-10 h-10 rounded-full bg-gray-600 overflow-hidden flex items-center justify-center text-xl font-bold cursor-pointer hover:opacity-80"
+              onClick={() => profilePicInputRef.current?.click()}
+              title="Click to change Profile Picture"
+            >
+              {currentUser.profile_picture ? (
+                <img src={currentUser.profile_picture} alt="DP" className="w-full h-full object-cover" />
+              ) : (
+                currentUser.username.charAt(0).toUpperCase()
+              )}
             </div>
             <input type="file" accept="image/*" ref={profilePicInputRef} className="hidden" onChange={handleProfilePicChange} />
             <div>
@@ -314,14 +347,12 @@ export default function UserDashboard() {
         </div>
 
         <div className="flex-1 overflow-y-auto bg-[#111b21]">
-          {/* FIX: AI Admin eka wenuwata Human Admin wa damma */}
-          <div onClick={() => setSelectedContact({ username: "System Admin", email: "zerotrust.admin@gmail.com" })} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'zerotrust.admin@gmail.com' ? 'bg-[#2a3942]' : ''}`}>
-            <div className="w-12 h-12 rounded-full bg-teal-900 flex items-center justify-center border border-teal-500 text-teal-400 font-bold">AD</div>
-            <div><h3 className="font-bold text-teal-400">System Admin</h3><p className="text-xs text-gray-400">Human Administrator</p></div>
+          <div onClick={() => setSelectedContact({ username: "Security Admin (AI)", email: "ai_admin" })} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'ai_admin' ? 'bg-[#2a3942]' : ''}`}>
+            <div className="w-12 h-12 rounded-full bg-teal-900 flex items-center justify-center border border-teal-500 text-teal-400">AI</div>
+            <div><h3 className="font-bold text-teal-400">Security Admin (AI)</h3><p className="text-xs text-gray-400">Secure automated assistant</p></div>
           </div>
-          
           <div onClick={() => setSelectedContact({ username: "Global Chat Room", email: "global" })} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'global' ? 'bg-[#2a3942]' : ''}`}>
-            <div className="w-12 h-12 rounded-full bg-blue-900 flex items-center justify-center border border-blue-500 text-blue-400 font-bold">GL</div>
+            <div className="w-12 h-12 rounded-full bg-blue-900 flex items-center justify-center border border-blue-500 text-blue-400">GL</div>
             <div><h3 className="font-bold text-blue-400">Global Chat Room</h3><p className="text-xs text-gray-400">Broadcast to all</p></div>
           </div>
 
@@ -347,7 +378,7 @@ export default function UserDashboard() {
           <>
             <div className="bg-[#202c33] p-4 flex items-center gap-4 border-b border-[#111b21]">
               <div className="w-10 h-10 rounded-full bg-gray-700 overflow-hidden flex items-center justify-center text-lg font-bold">
-                {selectedContact.email === 'global' ? 'GL' : selectedContact.email === 'zerotrust.admin@gmail.com' ? 'AD' : selectedContact.profile_picture ? <img src={selectedContact.profile_picture} className="w-full h-full object-cover" /> : selectedContact.username.charAt(0).toUpperCase()}
+                {selectedContact.email === 'global' ? 'GL' : selectedContact.email === 'ai_admin' ? 'AI' : selectedContact.profile_picture ? <img src={selectedContact.profile_picture} className="w-full h-full object-cover" /> : selectedContact.username.charAt(0).toUpperCase()}
               </div>
               <div>
                 <h2 className="font-bold">{selectedContact.username}</h2>
