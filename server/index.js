@@ -1,412 +1,309 @@
-"use client";
-import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
-import CryptoJS from "crypto-js";
+// ==========================================
+// SECTION 1: IMPORTS & DATABASE CONNECTION
+// ==========================================
+const express = require('express');
+const cors = require('cors');
+const { Pool } = require('pg');
+const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
+const { generateSecurityReport, chatWithCopilot } = require('./aiSecurityBot');
 
-const SECRET_KEY = "ZeroTrustMasterKey2026";
+const app = express();
 
-export default function UserDashboard() {
-  const router = useRouter();
-  
-  // ==========================================
-  // SECTION 1: STATE MANAGEMENT
-  // ==========================================
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [users, setUsers] = useState<any[]>([]);
-  const [selectedContact, setSelectedContact] = useState<any>(null); 
-  const [messages, setMessages] = useState<any[]>([]);
-  const [files, setFiles] = useState<any[]>([]);
-  const [messageInput, setMessageInput] = useState("");
-  const [otpInput, setOtpInput] = useState("");
-  const [requestingFileId, setRequestingFileId] = useState<number | null>(null);
-  const [currentTime, setCurrentTime] = useState("");
-  
-  const [deviceWarning, setDeviceWarning] = useState(false);
-  const [deviceOtp, setDeviceOtp] = useState("");
-  const [currentIpAddress, setCurrentIpAddress] = useState("");
+// ==========================================
+// NEW: FIXED CORS CONFIGURATION
+// ==========================================
+app.use(cors({
+    origin: '*', // Oyaage srwmgp.me ekata full access denawa
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const profilePicInputRef = useRef<HTMLInputElement>(null);
-  const fileUploadInputRef = useRef<HTMLInputElement>(null);
+// Preflight requests walata force allow kireema
+app.options('*', cors());
 
-  // ==========================================
-  // ZERO TRUST: IP-BASED VERIFICATION ("IS THIS YOU?")
-  // ==========================================
-  useEffect(() => {
-    const userStr = localStorage.getItem("zeroTrustUser");
-    if (!userStr) {
-      router.push("/login");
-    } else {
-      const parsedUser = JSON.parse(userStr);
-      setCurrentUser(parsedUser);
+app.use(express.json({ limit: '50mb' }));
 
-      const checkIpChange = async () => {
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 20, 
+    idleTimeoutMillis: 30000, 
+    connectionTimeoutMillis: 2000, 
+});
+
+pool.connect()
+  .then(() => console.log("Neon Database connected successfully!"))
+  .catch(err => console.error("Database Connection Error:", err));
+
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+});
+
+// ==========================================
+// SECTION 2: HIGH TRAFFIC & SECURITY CONTROLS
+// ==========================================
+const globalTrafficLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, 
+    max: 150, 
+    message: { 
+        error: "System is experiencing high traffic.", 
+        message: "Zero Trust Protocol: Too many requests. Please try again in a minute." 
+    }
+});
+app.use(globalTrafficLimiter);
+
+let SYSTEM_LOCKDOWN = false;
+const checkLockdown = (req, res, next) => {
+    if (SYSTEM_LOCKDOWN && !req.path.includes('/admin')) {
+        return res.status(503).json({ error: "SYSTEM LOCKDOWN ACTIVE", message: "Zero Trust Protocol initiated." });
+    }
+    next();
+};
+app.use(checkLockdown);
+
+const loginBruteForceLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, max: 3, 
+    handler: async (req, res) => {
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const targetEmail = req.body.email || "Unknown";
+        const aiReport = await generateSecurityReport("Brute-Force", clientIp, targetEmail);
         try {
-          const res = await fetch("https://api.ipify.org?format=json");
-          const data = await res.json();
-          const currentIp = data.ip;
-          
-          setCurrentIpAddress(currentIp); 
-          
-          const savedIp = localStorage.getItem("trustedIpAddress");
-
-          if (!savedIp) {
-            localStorage.setItem("trustedIpAddress", currentIp);
-          } else if (savedIp !== currentIp) {
-            // BYPASSED
-            setDeviceWarning(false); 
-          }
-        } catch (error) {
-          console.error("Failed to fetch IP address.");
-        }
-      };
-
-      checkIpChange();
+            const receiver = targetEmail !== "Unknown" ? targetEmail : 'zerotrust.admin@gmail.com';
+            await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', receiver, aiReport]);
+        } catch (dbErr) {}
+        res.status(429).json({ error: "Security breach detected! IP blocked." });
     }
+});
 
-    const timer = setInterval(() => {
-      setCurrentTime(new Date().toLocaleTimeString("en-US", { hour12: true, hour: '2-digit', minute:'2-digit', second:'2-digit' }));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+// ==========================================
+// SECTION 3: AUTHENTICATION (REGISTER / LOGIN / OTP)
+// ==========================================
+app.post('/register', async (req, res) => {
+    try {
+        const { username, email } = req.body;
+        const userExists = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userExists.rows.length > 0) return res.status(401).json({ error: "Email already registered." });
+        const newUser = await pool.query("INSERT INTO users (username, email) VALUES ($1, $2) RETURNING id, username, email, status;", [username, email]);
+        res.status(201).json({ message: "Registration successful.", user: newUser.rows[0] });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-  // ==========================================
-  // ZERO TRUST: AUTO SESSION TIMEOUT (5 Mins)
-  // ==========================================
-  useEffect(() => {
-    if (deviceWarning) return; 
+app.post('/login', loginBruteForceLimiter, async (req, res) => {
+    try {
+        const { username, email, location } = req.body;
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1 AND username = $2", [email, username]);
+        if (userResult.rows.length === 0) return res.status(401).json({ error: "Invalid Credentials." });
+        
+        const user = userResult.rows[0];
+        if (user.status === 'pending') return res.status(403).json({ error: "Account pending approval." });
+        if (user.is_locked) return res.status(403).json({ error: "Account is locked." });
 
-    let timeout: NodeJS.Timeout;
-    const resetTimeout = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        alert("🔒 Zero Trust Security: You have been logged out due to inactivity.");
-        localStorage.removeItem("zeroTrustUser");
-        window.location.href = "/login"; 
-      }, 300000); 
-    };
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await pool.query("UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes', last_login_location = $2 WHERE email = $3", [otpCode, location, email]);
 
-    const events = ['mousemove', 'keydown', 'scroll', 'click'];
-    events.forEach(event => window.addEventListener(event, resetTimeout));
-    resetTimeout(); 
+        const mailOptions = { 
+            from: '"Zero Trust Security" <' + process.env.EMAIL_USER + '>', 
+            to: email, 
+            subject: "Zero Trust - Login OTP", 
+            html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                <h2 style="color: #005c4b;">Zero Trust Workspace</h2>
+                <p>Your secure One-Time Password (OTP) for login is:</p>
+                <h1 style="color: #333; letter-spacing: 2px;">${otpCode}</h1>
+                <p style="color: #777; font-size: 12px;">This code will expire in 5 minutes. Do not share it with anyone.</p>
+            </div>
+            ` 
+        };
+        await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: "OTP sent successfully." });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-    return () => {
-      events.forEach(event => window.removeEventListener(event, resetTimeout));
-      clearTimeout(timeout);
-    };
-  }, [deviceWarning]);
+app.post('/verify-otp', async (req, res) => {
+    try {
+        const { email, otp } = req.body;
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "Unknown IP";
+        
+        const userResult = await pool.query("SELECT *, (NOW() > otp_expiry) AS is_expired FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: "User not found." });
+        
+        const user = userResult.rows[0];
+        if (user.is_locked) return res.status(403).json({ error: "Account locked." });
 
-  // ==========================================
-  // SECTION 2: SAFE DATA FETCHING
-  // ==========================================
-  useEffect(() => {
-    if (deviceWarning) return; 
+        if (user.otp_code !== otp) {
+            const currentAttempts = (user.otp_attempts || 0) + 1;
+            
+            if (currentAttempts >= 4) {
+                // Lock the account
+                await pool.query("UPDATE users SET is_locked = TRUE, otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
+                
+                // Trigger Security Alert ONLY to Admin Dashboard (Not Global)
+                const alertMessage = `[SECURITY ALERT] ACCOUNT AUTOLOCKED\nTarget Email: ${email}\nSource IP: ${clientIp}\nReason: Maximum failed OTP attempts (4/4) reached. Account has been disabled to prevent unauthorized access.`;
+                try {
+                    await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', 'zerotrust.admin@gmail.com', alertMessage]);
+                } catch (dbErr) { console.error(dbErr); }
 
-    const fetchUsers = async () => {
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/users/approved");
-        const data = await res.json();
-        // FIX: Admin wa users list eken ain kala (mokada admin ta wenama button ekak udata dapu nisa)
-        if (Array.isArray(data)) {
-            setUsers(data.filter((u: any) => u.email !== currentUser?.email && u.email !== 'zerotrust.admin@gmail.com'));
+                return res.status(403).json({ error: "Account locked due to 4 failed OTP attempts." });
+            } else {
+                await pool.query("UPDATE users SET otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
+                return res.status(401).json({ error: `Invalid OTP. ${4 - currentAttempts} attempts remaining.` });
+            }
         }
-      } catch (err) {}
-    };
-    if (currentUser) fetchUsers();
-    const userInterval = setInterval(() => { if (currentUser) fetchUsers(); }, 5000);
-    return () => clearInterval(userInterval);
-  }, [currentUser, deviceWarning]);
 
-  const fetchData = async () => {
-    if (!currentUser || !selectedContact || deviceWarning) return;
+        if (user.is_expired) return res.status(401).json({ error: "OTP expired." });
+
+        await pool.query("UPDATE users SET otp_attempts = 0, otp_code = NULL, otp_expiry = NULL, last_login_time = NOW(), last_login_ip = $1, session_active = TRUE WHERE email = $2", [clientIp, email]);
+        
+        res.status(200).json({ message: "Login successful!", user });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
+
+// ==========================================
+// SECTION 4: FETCH APPROVED USERS
+// ==========================================
+app.get('/users/approved', async (req, res) => {
     try {
-      const msgRes = await fetch("https://zero-trust-project-new.vercel.app/messages/get", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
-      });
-      if (msgRes.ok) {
-        const msgData = await msgRes.json();
-        if (Array.isArray(msgData)) {
-          const decryptedMessages = msgData.map((msg: any) => {
-            try {
-              const bytes = CryptoJS.AES.decrypt(msg.content, SECRET_KEY);
-              msg.content = bytes.toString(CryptoJS.enc.Utf8) || msg.content; 
-            } catch (e) { msg.content = "[Encrypted Data]"; }
-            return { ...msg, type: 'message' };
-          });
-          setMessages(decryptedMessages);
+        const result = await pool.query("SELECT * FROM users WHERE status = 'approved' ORDER BY username ASC");
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
+
+// ==========================================
+// SECTION 5: MESSAGING SYSTEM
+// ==========================================
+app.post('/messages/send', async (req, res) => {
+    try {
+        const { sender_email, receiver_email, content } = req.body;
+        const result = await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3) RETURNING *", [sender_email, receiver_email, content]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Message send failed." }); }
+});
+
+app.post('/messages/get', async (req, res) => {
+    try {
+        const { email, chat_with } = req.body;
+        let result;
+        if (chat_with === 'global' || !chat_with) {
+            // Global Chat ekata 'ai_admin' ge alerts ena eka block kala
+            result = await pool.query("SELECT * FROM messages WHERE (receiver_email IS NULL OR receiver_email = 'global') AND sender_email != 'ai_admin' ORDER BY timestamp ASC");
+        } else if (chat_with === 'ai_admin') {
+            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = 'ai_admin') OR (sender_email = 'ai_admin' AND receiver_email = $1) ORDER BY timestamp ASC", [email]);
+        } else {
+            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
         }
-      }
-    } catch (err) {}
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Failed to fetch conversation." }); }
+});
 
+// ==========================================
+// SECTION 6: SECURE FILE TRANSFER
+// ==========================================
+app.post('/files/upload', async (req, res) => {
     try {
-      const fileRes = await fetch("https://zero-trust-project-new.vercel.app/files/list", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: currentUser.email, chat_with: selectedContact.email }),
-      });
-      if (fileRes.ok) {
-        const fileData = await fileRes.json();
-        if (Array.isArray(fileData)) setFiles(fileData.map((f:any) => ({...f, type: 'file'})));
-      }
-    } catch (err) {}
-  };
+        const { sender_email, receiver_email, file_name, file_data } = req.body;
+        const result = await pool.query("INSERT INTO files (sender_email, receiver_email, file_name, file_data) VALUES ($1, $2, $3, $4) RETURNING *", [sender_email, receiver_email, file_name, file_data]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "File upload failed." }); }
+});
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 3000); 
-    return () => clearInterval(interval);
-  }, [selectedContact, currentUser, deviceWarning]);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, files]);
-
-
-  // ==========================================
-  // SECTION 3: USER ACTIONS
-  // ==========================================
-  const handleVerifyDevice = (e: any) => {
-    e.preventDefault();
-    if (deviceOtp === "123456") {
-      alert("✅ Location Verified Successfully! This IP is now trusted.");
-      localStorage.setItem("trustedIpAddress", currentIpAddress); 
-      setDeviceWarning(false);
-    } else {
-      alert("❌ Invalid verification code. Access Denied.");
-    }
-  };
-
-  const handleSendMessage = async (e: any) => {
-    e.preventDefault();
-    if (!messageInput.trim() || !selectedContact) return;
-    
-    // FIX: AI alert eka ain kala mokada dan katha karanne Human Admin ekka
-    const encryptedText = CryptoJS.AES.encrypt(messageInput, SECRET_KEY).toString();
-    const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
-
+app.post('/files/list', async (req, res) => {
     try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/messages/send", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender_email: currentUser.email, receiver_email: receiver, content: encryptedText }),
-      });
-      if (res.ok) { setMessageInput(""); fetchData(); }
-    } catch (err) {}
-  };
-
-  const handleSendFile = (e: any) => {
-    const file = e.target.files[0];
-    if (!file || !selectedContact) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const encryptedFile = CryptoJS.AES.encrypt(event.target?.result as string, SECRET_KEY).toString();
-      const receiver = selectedContact.email === 'global' ? null : selectedContact.email;
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/files/upload", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sender_email: currentUser.email, receiver_email: receiver, file_name: file.name, file_data: encryptedFile }),
-        });
-        if(res.ok) { alert(`File sent.`); fetchData(); }
-      } catch (err) {}
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleRequestOTP = async (fileId: number) => {
-    try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/files/request-otp", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: fileId, receiver_email: currentUser.email }),
-      });
-      if(res.ok) {
-        alert("OTP sent to your email! (Please check your Inbox)");
-        setRequestingFileId(fileId);
-      } else { alert("Failed to send OTP."); }
-    } catch (err) { alert("Network connection error."); }
-  };
-
-  const handleDownloadFile = async (e: any, fileId: number) => {
-    e.preventDefault();
-    try {
-      const res = await fetch("https://zero-trust-project-new.vercel.app/files/download", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: fileId, otp: otpInput }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        const bytes = CryptoJS.AES.decrypt(data.file_data, SECRET_KEY);
-        const a = document.createElement("a");
-        a.href = bytes.toString(CryptoJS.enc.Utf8);
-        a.download = data.file_name;
-        a.click();
-        setRequestingFileId(null); setOtpInput("");
-      } else { alert(data.error); }
-    } catch (err) { alert("Download failed."); }
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("zeroTrustUser");
-    window.location.href = "/login";
-  };
-
-  const handleProfilePicChange = (e: any) => {
-    const file = e.target.files[0];
-    if (!file || !currentUser) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64Pic = event.target?.result as string;
-      try {
-        const res = await fetch("https://zero-trust-project-new.vercel.app/user/profile-pic", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: currentUser.email, profilePicture: base64Pic }),
-        });
-        if (res.ok) {
-          const updatedUser = { ...currentUser, profile_picture: base64Pic };
-          setCurrentUser(updatedUser);
-          localStorage.setItem("zeroTrustUser", JSON.stringify(updatedUser));
-          alert("Profile picture updated securely.");
+        const { email, chat_with } = req.body;
+        let result;
+        if (chat_with === 'global') {
+            result = await pool.query("SELECT id, sender_email, receiver_email, file_name, timestamp FROM files WHERE receiver_email IS NULL OR receiver_email = 'global' ORDER BY timestamp ASC");
+        } else {
+            result = await pool.query("SELECT id, sender_email, receiver_email, file_name, timestamp FROM files WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
         }
-      } catch (err) {}
-    };
-    reader.readAsDataURL(file);
-  };
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Failed to fetch files." }); }
+});
 
-  const combinedFeed = [...messages, ...files].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+app.post('/files/request-otp', async (req, res) => {
+    try {
+        const { file_id, receiver_email } = req.body;
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await pool.query("UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE email = $2", [otpCode, receiver_email]);
+        
+        const mailOptions = {
+            from: '"Zero Trust Security" <' + process.env.EMAIL_USER + '>',
+            to: receiver_email,
+            subject: "Secure File Download OTP",
+            html: `<p>Your OTP to unlock this file is: <b>${otpCode}</b></p>`
+        };
+        await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: "OTP sent" });
+    } catch (err) { res.status(500).json({ error: "OTP request failed." }); }
+});
 
-  if (!currentUser) return <div className="h-screen bg-[#0b141a] text-white flex items-center justify-center">Loading...</div>;
+app.post('/files/download', async (req, res) => {
+    try {
+        const { file_id, otp } = req.body;
+        const userResult = await pool.query("SELECT * FROM users WHERE otp_code = $1 AND NOW() <= otp_expiry", [otp]);
+        if(userResult.rows.length === 0) return res.status(401).json({ error: "Invalid or expired OTP." });
+        
+        await pool.query("UPDATE users SET otp_code = NULL WHERE id = $1", [userResult.rows[0].id]);
+        const fileResult = await pool.query("SELECT * FROM files WHERE id = $1", [file_id]);
+        res.status(200).json(fileResult.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Download failed." }); }
+});
 
-  if (deviceWarning) {
-    return (
-      <div className="flex h-screen bg-[#0b141a] text-white items-center justify-center font-sans">
-        <div className="bg-[#111b21] p-8 rounded-lg text-center border-t-4 border-red-500 max-w-md shadow-2xl">
-          <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-red-500 text-2xl font-bold mb-2">Unrecognized Location / IP</h2>
-          <p className="mb-6 text-sm text-gray-400">
-            You are trying to access the Zero Trust Workspace from a new IP Address. To maintain security, an <b>"Is this you?"</b> verification code has been sent to <b>{currentUser?.email}</b>.
-          </p>
-          <form onSubmit={handleVerifyDevice}>
-            <input type="text" placeholder="Enter 6-Digit Code" required maxLength={6} value={deviceOtp} onChange={(e)=>setDeviceOtp(e.target.value)} className="w-full bg-[#2a3942] text-white border border-gray-600 focus:border-blue-500 p-3 rounded mb-4 text-center tracking-[0.5em] text-lg outline-none" />
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition-colors">Verify & Trust Location</button>
-          </form>
-          <button onClick={handleLogout} className="mt-6 text-sm text-gray-500 hover:text-gray-300 underline">Cancel and Logout</button>
-        </div>
-      </div>
-    );
-  }
+app.post('/user/profile-pic', async (req, res) => {
+    try {
+        const { email, profilePicture } = req.body;
+        await pool.query("UPDATE users SET profile_picture = $1 WHERE email = $2", [profilePicture, email]);
+        res.status(200).json({ message: "Profile picture updated" });
+    } catch (err) { res.status(500).json({ error: "Failed" }); }
+});
 
-  return (
-    <div className="flex h-screen bg-[#0b141a] text-[#e9edef] font-sans">
-      {/* LEFT SIDEBAR */}
-      <div className="w-1/3 max-w-[400px] border-r border-[#202c33] flex flex-col bg-[#111b21]">
-        <div className="bg-[#202c33] p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gray-600 overflow-hidden flex items-center justify-center text-xl font-bold cursor-pointer hover:opacity-80" onClick={() => profilePicInputRef.current?.click()} title="Click to change Profile Picture">
-              {currentUser.profile_picture ? <img src={currentUser.profile_picture} alt="DP" className="w-full h-full object-cover" /> : currentUser.username.charAt(0).toUpperCase()}
-            </div>
-            <input type="file" accept="image/*" ref={profilePicInputRef} className="hidden" onChange={handleProfilePicChange} />
-            <div>
-              <h2 className="font-bold text-sm">{currentUser.username}</h2>
-              <p className="text-[10px] text-green-400">{currentTime}</p>
-            </div>
-          </div>
-          <button onClick={handleLogout} className="text-gray-400 hover:text-red-400">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
-          </button>
-        </div>
+// ==========================================
+// SECTION 7: ADMIN CONTROLS
+// ==========================================
+app.get('/admin/users', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM users ORDER BY id ASC");
+        res.status(200).json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-        <div className="flex-1 overflow-y-auto bg-[#111b21]">
-          {/* FIX: AI Admin eka wenuwata Human Admin wa damma */}
-          <div onClick={() => setSelectedContact({ username: "System Admin", email: "zerotrust.admin@gmail.com" })} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'zerotrust.admin@gmail.com' ? 'bg-[#2a3942]' : ''}`}>
-            <div className="w-12 h-12 rounded-full bg-teal-900 flex items-center justify-center border border-teal-500 text-teal-400 font-bold">AD</div>
-            <div><h3 className="font-bold text-teal-400">System Admin</h3><p className="text-xs text-gray-400">Human Administrator</p></div>
-          </div>
-          
-          <div onClick={() => setSelectedContact({ username: "Global Chat Room", email: "global" })} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === 'global' ? 'bg-[#2a3942]' : ''}`}>
-            <div className="w-12 h-12 rounded-full bg-blue-900 flex items-center justify-center border border-blue-500 text-blue-400 font-bold">GL</div>
-            <div><h3 className="font-bold text-blue-400">Global Chat Room</h3><p className="text-xs text-gray-400">Broadcast to all</p></div>
-          </div>
+app.post('/admin/user/action', async (req, res) => {
+    try {
+        const { email, action } = req.body;
+        if (action === 'approve') await pool.query("UPDATE users SET status = 'approved' WHERE email = $1", [email]);
+        else if (action === 'lock') await pool.query("UPDATE users SET is_locked = TRUE WHERE email = $1", [email]);
+        else if (action === 'unlock') await pool.query("UPDATE users SET is_locked = FALSE, otp_attempts = 0 WHERE email = $1", [email]);
+        else if (action === 'kick') await pool.query("UPDATE users SET session_active = FALSE WHERE email = $1", [email]);
+        res.status(200).json({ message: `User updated.` });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-          {users.map(u => (
-            <div key={u.email} onClick={() => setSelectedContact(u)} className={`flex items-center gap-4 p-4 cursor-pointer border-b border-[#202c33] hover:bg-[#202c33] ${selectedContact?.email === u.email ? 'bg-[#2a3942]' : ''}`}>
-              <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden text-xl font-bold">
-                {u.profile_picture ? <img src={u.profile_picture} alt="DP" className="w-full h-full object-cover" /> : u.username.charAt(0).toUpperCase()}
-              </div>
-              <div><h3 className="font-bold">{u.username}</h3><p className="text-xs text-gray-400">{u.email}</p></div>
-            </div>
-          ))}
-        </div>
-      </div>
+app.post('/admin/system/lockdown', async (req, res) => {
+    try {
+        const { state } = req.body;
+        SYSTEM_LOCKDOWN = state;
+        if(state) await pool.query("UPDATE users SET session_active = FALSE");
+        res.status(200).json({ message: state ? "LOCKDOWN ENGAGED" : "LOCKDOWN LIFTED" });
+    } catch (err) { res.status(500).json({ error: "Failed." }); }
+});
 
-      {/* RIGHT SIDEBAR */}
-      <div className="flex-1 flex flex-col relative bg-[#0b141a]">
-        {!selectedContact ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center px-10">
-            <h1 className="text-4xl font-light mb-4">Zero Trust Workspace</h1>
-            <p className="text-gray-400">Select a contact to start an encrypted conversation.</p>
-          </div>
-        ) : (
-          <>
-            <div className="bg-[#202c33] p-4 flex items-center gap-4 border-b border-[#111b21]">
-              <div className="w-10 h-10 rounded-full bg-gray-700 overflow-hidden flex items-center justify-center text-lg font-bold">
-                {selectedContact.email === 'global' ? 'GL' : selectedContact.email === 'zerotrust.admin@gmail.com' ? 'AD' : selectedContact.profile_picture ? <img src={selectedContact.profile_picture} className="w-full h-full object-cover" /> : selectedContact.username.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <h2 className="font-bold">{selectedContact.username}</h2>
-                <p className="text-xs text-green-500">End-to-End Encrypted Connection</p>
-              </div>
-            </div>
+app.post('/admin/copilot/chat', async (req, res) => {
+    try {
+        const { message } = req.body;
+        const aiResponse = await chatWithCopilot(message);
+        res.status(200).json({ response: aiResponse });
+    } catch (err) { res.status(500).json({ error: "Server Error." }); }
+});
 
-            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 bg-[#0b141a]">
-              {combinedFeed.map((item, index) => {
-                const isMine = item.sender_email === currentUser.email;
-                if (item.type === 'message') {
-                  return (
-                    <div key={`msg-${index}`} className={`flex flex-col max-w-[65%] ${isMine ? 'self-end' : 'self-start'}`}>
-                      <div className={`p-3 rounded-lg shadow ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
-                        <p className="text-sm break-words">{item.content}</p>
-                      </div>
-                    </div>
-                  );
-                } else {
-                  return (
-                    <div key={`file-${item.id}`} className={`flex flex-col max-w-[70%] ${isMine ? 'self-end' : 'self-start'}`}>
-                      <div className={`bg-[#202c33] p-4 rounded-lg shadow border border-gray-700 ${isMine ? 'bg-[#005c4b] rounded-tr-none' : 'bg-[#202c33] rounded-tl-none'}`}>
-                        <p className="font-bold text-sm text-blue-400">📎 {item.file_name}</p>
-                        
-                        {isMine ? (
-                          <p className="text-xs text-green-300 mt-2">Encrypted & Sent</p>
-                        ) : requestingFileId === item.id ? (
-                          <div className="mt-3 flex flex-col gap-2">
-                            <form onSubmit={(e) => handleDownloadFile(e, item.id)} className="flex gap-2">
-                              <input type="text" placeholder="OTP" value={otpInput} onChange={(e) => setOtpInput(e.target.value)} required className="bg-[#2a3942] w-24 text-center text-white rounded p-1" />
-                              <button type="submit" className="bg-green-600 hover:bg-green-500 transition-colors px-3 py-1 rounded text-xs font-bold">Unlock</button>
-                            </form>
-                            <div className="flex gap-4 mt-1 text-[11px] font-bold">
-                              <button onClick={() => handleRequestOTP(item.id)} className="text-blue-400 hover:text-blue-300 underline">Resend OTP</button>
-                              <button onClick={() => {setRequestingFileId(null); setOtpInput("");}} className="text-red-400 hover:text-red-300 underline">Cancel</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button onClick={() => handleRequestOTP(item.id)} className="bg-blue-600 hover:bg-blue-500 transition-colors px-4 py-2 rounded text-xs font-bold mt-2 w-full text-center">Request OTP to Download</button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-              })}
-              <div ref={chatEndRef} />
-            </div>
+app.get('/admin/logs/messages', async (req, res) => { 
+    try {
+        const result = await pool.query("SELECT * FROM messages ORDER BY timestamp DESC");
+        res.json(result.rows);
+    } catch (e) { res.json([]); }
+});
 
-            <div className="bg-[#202c33] p-4 flex items-center gap-4">
-              <div className="text-gray-400 cursor-pointer" onClick={() => fileUploadInputRef.current?.click()}>📎</div>
-              <input type="file" ref={fileUploadInputRef} className="hidden" onChange={handleSendFile} />
-              <form onSubmit={handleSendMessage} className="flex-1 flex gap-4">
-                <input type="text" value={messageInput} onChange={e => setMessageInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-[#2a3942] text-white px-4 py-3 rounded-lg focus:outline-none" />
-                <button type="submit" className="bg-[#00a884] text-white p-3 rounded-full">→</button>
-              </form>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Zero Trust Backend running on port ${PORT}`));
+module.exports = app;
