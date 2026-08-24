@@ -272,7 +272,7 @@ export default function AdminDashboard() {
 
           {/* Manual Node Provisioning Section */}
           <div className="mt-6 border border-[#008b8b] p-4 bg-black" style={{ border: '1px solid #088', padding: '15px', backgroundColor: '#000' }}>
-            <h3 style={{ color: '#0ff', fontSize: '14px', fontWeight: 'bold', margin: '0 0 15px 0' }}>// PROVISION NEW NODE (MANUAL ADD)</h3>
+            <h3 style={{ color: '#0ff', fontSize: '14px', fontWeight: 'bold', margin: '0 0 15px 0' }}> ADD NEW USER </h3>
             <form onSubmit={handleManualAdd} style={{ display: 'flex', gap: '15px' }}>
               <input
                 type="text"
@@ -296,7 +296,7 @@ export default function AdminDashboard() {
                 onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#0ff'; e.currentTarget.style.color = '#000'; }}
                 onMouseOut={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#0ff'; }}
               >
-                [+] ADD NODE
+                [+] ADD USER
               </button>
             </form>
           </div>
