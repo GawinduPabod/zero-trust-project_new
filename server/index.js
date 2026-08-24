@@ -10,17 +10,7 @@ require('dotenv').config();
 const { generateSecurityReport, chatWithCopilot } = require('./aiSecurityBot');
 
 const app = express();
-
-// ==========================================
-// NEW: FIXED CORS CONFIGURATION
-// ==========================================
-app.use(cors({
-    origin: '*', 
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.options('*', cors());
-
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 const pool = new Pool({
@@ -62,20 +52,6 @@ const checkLockdown = (req, res, next) => {
 };
 app.use(checkLockdown);
 
-const loginBruteForceLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, max: 3, 
-    handler: async (req, res) => {
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        const targetEmail = req.body.email || "Unknown";
-        const aiReport = await generateSecurityReport("Brute-Force", clientIp, targetEmail);
-        try {
-            const receiver = targetEmail !== "Unknown" ? targetEmail : 'zerotrust.admin@gmail.com';
-            await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', receiver, aiReport]);
-        } catch (dbErr) {}
-        res.status(429).json({ error: "Security breach detected! IP blocked." });
-    }
-});
-
 // ==========================================
 // SECTION 3: AUTHENTICATION (REGISTER / LOGIN / OTP)
 // ==========================================
@@ -89,7 +65,7 @@ app.post('/register', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Server Error." }); }
 });
 
-app.post('/login', loginBruteForceLimiter, async (req, res) => {
+app.post('/login', async (req, res) => {
     try {
         const { username, email, location } = req.body;
         const userResult = await pool.query("SELECT * FROM users WHERE email = $1 AND username = $2", [email, username]);
@@ -135,10 +111,13 @@ app.post('/verify-otp', async (req, res) => {
             const currentAttempts = (user.otp_attempts || 0) + 1;
             
             if (currentAttempts >= 4) {
+                // Lock the account
                 await pool.query("UPDATE users SET is_locked = TRUE, otp_attempts = $1 WHERE email = $2", [currentAttempts, email]);
                 
+                // NEW FIX: Trigger Security Alert ONLY to Admin Dashboard (Not Global)
                 const alertMessage = `[SECURITY ALERT] ACCOUNT AUTOLOCKED\nTarget Email: ${email}\nSource IP: ${clientIp}\nReason: Maximum failed OTP attempts (4/4) reached. Account has been disabled to prevent unauthorized access.`;
                 try {
+                    // 'null' wenuwata Admin ge email ekata vitharak yawanawa
                     await pool.query("INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", ['ai_admin', 'zerotrust.admin@gmail.com', alertMessage]);
                 } catch (dbErr) { console.error(dbErr); }
 
@@ -183,9 +162,10 @@ app.post('/messages/get', async (req, res) => {
         const { email, chat_with } = req.body;
         let result;
         if (chat_with === 'global' || !chat_with) {
+            // NEW FIX: Global Chat ekata 'ai_admin' ge alerts ena eka block kala
             result = await pool.query("SELECT * FROM messages WHERE (receiver_email IS NULL OR receiver_email = 'global') AND sender_email != 'ai_admin' ORDER BY timestamp ASC");
-        } else if (chat_with === 'ai_admin' || chat_with === 'zerotrust.admin@gmail.com') {
-            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
+        } else if (chat_with === 'ai_admin') {
+            result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = 'ai_admin') OR (sender_email = 'ai_admin' AND receiver_email = $1) ORDER BY timestamp ASC", [email]);
         } else {
             result = await pool.query("SELECT * FROM messages WHERE (sender_email = $1 AND receiver_email = $2) OR (sender_email = $2 AND receiver_email = $1) ORDER BY timestamp ASC", [email, chat_with]);
         }
@@ -260,12 +240,10 @@ app.post('/user/profile-pic', async (req, res) => {
 app.get('/admin/users', async (req, res) => {
     try {
         const result = await pool.query("SELECT * FROM users ORDER BY id ASC");
-        // FIX: Removed the 'a' typo here
         res.status(200).json(result.rows);
     } catch (err) { res.status(500).json({ error: "Server Error." }); }
 });
 
-// FIX: Re-added missing admin user action route
 app.post('/admin/user/action', async (req, res) => {
     try {
         const { email, action } = req.body;
