@@ -35,22 +35,30 @@ const transporter = nodemailer.createTransport({
 // ==========================================
 const globalTrafficLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, 
-    max: 30, // Meka 150 indan 30 ta wenas karanna
-    message: { 
-        error: "System is experiencing high traffic.", 
-        message: "Zero Trust Protocol: Too many requests. Please try again in a minute." 
+    max: 30, // Request 30k giyama block wenawa
+    handler: async (req, res, next, options) => {
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "Unknown IP";
+        
+        // Dashboard ekata yana alert message eka
+        const alertMessage = `[SECURITY ALERT] DDoS PROTECTION ENGAGED\nTarget API: ${req.originalUrl}\nSource IP: ${clientIp}\nReason: Rate limit exceeded (${options.max} requests). Traffic blocked by Application Firewall.`;
+        
+        try {
+            // Admin dashboard ekata alert eka save kireema
+            await pool.query(
+                "INSERT INTO messages (sender_email, receiver_email, content) VALUES ($1, $2, $3)", 
+                ['ai_admin', 'zerotrust.admin@gmail.com', alertMessage]
+            );
+        } catch (dbErr) { 
+            console.error(dbErr); 
+        }
+
+        // Attacker ta 429 error eka laba deema
+        res.status(options.statusCode).send({ 
+            error: "System is experiencing high traffic.", 
+            message: "Zero Trust Protocol: Too many requests. Please try again in a minute." 
+        });
     }
 });
-app.use(globalTrafficLimiter);
-
-let SYSTEM_LOCKDOWN = false;
-const checkLockdown = (req, res, next) => {
-    if (SYSTEM_LOCKDOWN && !req.path.includes('/admin')) {
-        return res.status(503).json({ error: "SYSTEM LOCKDOWN ACTIVE", message: "Zero Trust Protocol initiated." });
-    }
-    next();
-};
-app.use(checkLockdown);
 
 // ==========================================
 // SECTION 3: AUTHENTICATION (REGISTER / LOGIN / OTP)
