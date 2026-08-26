@@ -35,7 +35,7 @@ const transporter = nodemailer.createTransport({
 // ==========================================
 const globalTrafficLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, 
-    max: 150, 
+    max: 30, // Meka 150 indan 30 ta wenas karanna
     message: { 
         error: "System is experiencing high traffic.", 
         message: "Zero Trust Protocol: Too many requests. Please try again in a minute." 

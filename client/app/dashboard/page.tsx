@@ -41,23 +41,23 @@ export default function UserDashboard() {
       const parsedUser = JSON.parse(userStr);
       setCurrentUser(parsedUser);
 
-      // IP එක පරීක්ෂා කරන Function එක
+      // IP ek chek krna Function eka 
       const checkIpChange = async () => {
         try {
-          // බාහිර API එකක් හරහා පරිශීලකයාගේ සැබෑ IP එක ලබා ගැනීම
+          //
           const res = await fetch("https://api.ipify.org?format=json");
           const data = await res.json();
           const currentIp = data.ip;
           
-          setCurrentIpAddress(currentIp); // අලුත් IP එක State එකේ තියාගන්නවා
+          setCurrentIpAddress(currentIp); 
           
           const savedIp = localStorage.getItem("trustedIpAddress");
 
           if (!savedIp) {
-            // පළමු වරට ලොග් වන විට IP එක Trusted ලෙස සේව් වේ
+            // first time log veddi IP eka trust venva
             localStorage.setItem("trustedIpAddress", currentIp);
           } else if (savedIp !== currentIp) {
-            // IP එක වෙනස් වී ඇත්නම් Warning තිරය පෙන්වීම
+            // IP eka venas nam screan eke pena ek
             
             // BYPASS KALA: true wenuwata false damma. Dan kavadavath popup eka enne naha!
             setDeviceWarning(false); 
@@ -87,7 +87,7 @@ export default function UserDashboard() {
     const resetTimeout = () => {
       clearTimeout(timeout);
       timeout = setTimeout(() => {
-        alert("🔒 Zero Trust Security: You have been logged out due to inactivity.");
+        alert(" Zero Trust Security: You have been logged out due to inactivity.");
         localStorage.removeItem("zeroTrustUser");
         window.location.href = "/login"; 
       }, 300000); 
@@ -172,11 +172,11 @@ export default function UserDashboard() {
   const handleVerifyDevice = (e: any) => {
     e.preventDefault();
     if (deviceOtp === "123456") {
-      alert("✅ Location Verified Successfully! This IP is now trusted.");
+      alert(" Location Verified Successfully! This IP is now trusted.");
       localStorage.setItem("trustedIpAddress", currentIpAddress); 
       setDeviceWarning(false);
     } else {
-      alert("❌ Invalid verification code. Access Denied.");
+      alert(" Invalid verification code. Access Denied.");
     }
   };
 
