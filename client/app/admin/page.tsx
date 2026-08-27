@@ -1,8 +1,3 @@
-admin 
-
-
-
-
 "use client";
 import React, { useState, useEffect } from 'react';
 
@@ -239,7 +234,7 @@ export default function AdminDashboard() {
           {/* Active Nodes Table */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h3 style={{ color: '#0ff', margin: 0 }}>// ACTIVE NODES (USERS)</h3>
+              <h3 style={{ color: '#0ff', margin: 0 }}>//ADD NODES (USERS)</h3>
               <button onClick={downloadCSV} style={{ background: '#022', color: '#0ff', border: '1px solid #0ff', padding: '5px 10px', cursor: 'pointer' }}>
                 [ Export Users (CSV) ]
               </button>
